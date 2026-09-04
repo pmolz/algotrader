@@ -26,7 +26,16 @@ def main():
     ap.add_argument("--source", default=get(cfg, "data.default_source"))
     ap.add_argument("--timeframe", default=get(cfg, "data.default_timeframe"))
     ap.add_argument("--iterations", type=int, default=get(cfg, "agent.max_iterations", 5))
+    ap.add_argument("--sandbox", action="store_true",
+                    help="run generated code inside the Docker jail (recommended)")
+    ap.add_argument("--no-sandbox", action="store_true",
+                    help="force in-process exec (supervised local use only)")
     args = ap.parse_args()
+
+    if args.sandbox:
+        cfg["agent"]["use_sandbox"] = True
+    if args.no_sandbox:
+        cfg["agent"]["use_sandbox"] = False
 
     df = fetch(args.symbol, source=args.source, timeframe=args.timeframe,
                cache_dir=get(cfg, "data.cache_dir"))

@@ -26,6 +26,12 @@ from .codegen import load_strategy_class, parse_response
 from .llm import make_client
 from .memory import ExperimentDB
 from .prompts import FIX_TEMPLATE, PROPOSE_TEMPLATE, SYSTEM_PROMPT
+from .sandbox import (
+    SandboxError,
+    SandboxLimits,
+    docker_available,
+    run_gauntlet_sandboxed,
+)
 
 
 class AgentLoop:
@@ -40,8 +46,51 @@ class AgentLoop:
         self.generated_dir.mkdir(parents=True, exist_ok=True)
         self.llm = make_client(get(cfg, "agent.provider"), get(cfg, "agent.model"))
 
+        self.use_sandbox = bool(get(cfg, "agent.use_sandbox", False))
+        self.sandbox_limits = SandboxLimits(
+            image=get(cfg, "sandbox.image", "algotrader-sandbox:latest"),
+            memory=get(cfg, "sandbox.memory", "1g"),
+            cpus=str(get(cfg, "sandbox.cpus", "2")),
+            pids=int(get(cfg, "sandbox.pids", 128)),
+            timeout_s=int(get(cfg, "sandbox.timeout_s", 120)),
+        )
+        if self.use_sandbox and not docker_available():
+            raise RuntimeError(
+                "agent.use_sandbox is true but Docker is not available. "
+                "Start Docker or set use_sandbox: false."
+            )
+
     def _llm_ready(self) -> bool:
         return self.llm is not None and self.llm.available()
+
+    def _evaluate(self, code: str, n_trials: int) -> dict:
+        """Load + gauntlet a candidate. Returns a normalized report dict:
+        {ok, promoted, reasons, checks, error, strategy_name?, params?}.
+
+        Sandbox mode NEVER execs the untrusted code in this process.
+        """
+        if self.use_sandbox:
+            try:
+                return run_gauntlet_sandboxed(
+                    self.df, code, self.cfg, n_trials=n_trials, limits=self.sandbox_limits
+                )
+            except SandboxError as e:
+                return {"ok": False, "promoted": False, "reasons": ["FAIL sandbox"],
+                        "checks": {}, "error": str(e)}
+        # in-process path (supervised local use only)
+        try:
+            strategy = self._load(code)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "promoted": False, "reasons": ["FAIL codegen"],
+                    "checks": {}, "error": f"{type(e).__name__}: {e}"}
+        try:
+            report = run_gauntlet(self.df, strategy, self.cfg, n_trials=n_trials)
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "promoted": False, "reasons": ["FAIL gauntlet crash"],
+                    "checks": {}, "error": traceback.format_exc(limit=3)}
+        return {"ok": True, "promoted": report.promoted, "reasons": report.reasons,
+                "checks": report.checks, "error": None,
+                "strategy_name": strategy.name, "params": strategy.params}
 
     # -- generation ---------------------------------------------------------------
     def _propose(self) -> tuple[str, str, str]:
@@ -97,69 +146,43 @@ class GeneratedSma(Strategy):
             )
             return {"id": exp_id, "promoted": False, "error": err}
 
-        strategy = None
-        error = None
-        for attempt in range(2):
-            try:
-                strategy = self._load(code)
-                break
-            except Exception as e:  # noqa: BLE001
-                error = f"{type(e).__name__}: {e}"
-                if self._llm_ready() and attempt == 0:
-                    text = self.llm.complete(
-                        SYSTEM_PROMPT, FIX_TEMPLATE.format(error=error, code=code)
-                    )
-                    try:
-                        hypothesis, code = parse_response(text)
-                    except Exception:  # noqa: BLE001
-                        break
-                else:
-                    break
-
-        if strategy is None:
-            exp_id = self.db.record(
-                symbol=self.symbol, source=self.source, timeframe=self.timeframe,
-                strategy_name=f"({gen_src})", hypothesis=hypothesis, params={},
-                code=code, promoted=False, metrics=None, gauntlet_checks=None,
-                reasons=["FAIL codegen"], error=error,
-            )
-            return {"id": exp_id, "promoted": False, "error": error}
-
         # honest multiple-testing count = every experiment ever run on this symbol
         n_trials = max(1, self.db.total_trials(self.symbol) + 1)
 
-        try:
-            report = run_gauntlet(self.df, strategy, self.cfg, n_trials=n_trials)
-        except Exception:  # noqa: BLE001
-            err = traceback.format_exc(limit=3)
-            exp_id = self.db.record(
-                symbol=self.symbol, source=self.source, timeframe=self.timeframe,
-                strategy_name=strategy.name, hypothesis=hypothesis,
-                params=strategy.params, code=code, promoted=False,
-                metrics=None, gauntlet_checks=None, reasons=["FAIL gauntlet crash"],
-                error=err,
-            )
-            return {"id": exp_id, "promoted": False, "error": err}
+        # Evaluate, with one LLM-assisted fix retry on a code/parse error.
+        rep = self._evaluate(code, n_trials)
+        if not rep["ok"] and self._llm_ready() and rep["reasons"] == ["FAIL codegen"]:
+            try:
+                text = self.llm.complete(
+                    SYSTEM_PROMPT, FIX_TEMPLATE.format(error=rep["error"], code=code)
+                )
+                hypothesis, code = parse_response(text)
+                rep = self._evaluate(code, n_trials)
+            except Exception:  # noqa: BLE001
+                pass
 
-        metrics = report.checks.get("oos_holdout") or report.checks.get(
-            "deflated_sharpe", {}
-        )
+        name = rep.get("strategy_name") or f"({gen_src})"
+        params = rep.get("params") or {}
+        checks = rep.get("checks") or {}
+        metrics = checks.get("oos_holdout") or checks.get("deflated_sharpe", {})
+
         exp_id = self.db.record(
             symbol=self.symbol, source=self.source, timeframe=self.timeframe,
-            strategy_name=strategy.name, hypothesis=hypothesis,
-            params=strategy.params, code=code, promoted=report.promoted,
-            metrics=metrics, gauntlet_checks=report.checks, reasons=report.reasons,
+            strategy_name=name, hypothesis=hypothesis, params=params,
+            code=code, promoted=rep["promoted"], metrics=metrics,
+            gauntlet_checks=checks, reasons=rep["reasons"], error=rep["error"],
         )
 
-        if report.promoted:
-            (self.generated_dir / f"{exp_id:05d}_{strategy.name}.py").write_text(code)
+        if rep["promoted"]:
+            (self.generated_dir / f"{exp_id:05d}_{name}.py").write_text(code)
 
         return {
             "id": exp_id,
-            "promoted": report.promoted,
-            "strategy": strategy.name,
+            "promoted": rep["promoted"],
+            "strategy": name,
             "hypothesis": hypothesis,
-            "report": report,
+            "reasons": rep["reasons"],
+            "error": rep["error"],
         }
 
     def run(self, iterations: int) -> list[dict]:
@@ -167,10 +190,12 @@ class GeneratedSma(Strategy):
         for i in range(iterations):
             print(f"\n=== Iteration {i + 1}/{iterations} ===")
             r = self.step()
-            if "report" in r:
-                print(f"[{r['strategy']}] {r['hypothesis']}")
-                print(r["report"].pretty())
-            else:
-                print(f"codegen/gauntlet error: {r.get('error')}")
+            print(f"[{r.get('strategy')}] {r.get('hypothesis', '')}")
+            status = "PROMOTED ✅" if r.get("promoted") else "REJECTED ❌"
+            print(f"Gauntlet: {status}")
+            for reason in r.get("reasons") or []:
+                print(f"  - {reason}")
+            if r.get("error"):
+                print(f"  error: {r['error'].splitlines()[-1] if r['error'] else ''}")
             results.append(r)
         return results

@@ -21,10 +21,10 @@ Build trust from the bottom up. Do not skip Phase 0.
 - [ ] "Lessons learned" memory the LLM retrieves before proposing
 
 ## Phase 2 — Automated loop
-- [ ] Docker sandbox per generated strategy (untrusted code!)
+- [x] Docker sandbox per generated strategy (untrusted code!)
+- [x] Multiple-testing bookkeeping across all experiments (n_trials from DB)
 - [ ] Overnight cron loop: propose -> code -> validate -> log -> reflect
 - [ ] Morning report generation
-- [ ] Multiple-testing bookkeeping across all experiments
 
 ## Phase 3 — Forward testing
 - [ ] Auto-promote gauntlet survivors to Alpaca paper trading
