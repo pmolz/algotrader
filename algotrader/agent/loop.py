@@ -35,13 +35,26 @@ from .sandbox import (
 
 
 class AgentLoop:
-    def __init__(self, df: pd.DataFrame, cfg: dict, *, symbol: str, source: str, timeframe: str):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        cfg: dict,
+        *,
+        symbol: str,
+        source: str,
+        timeframe: str,
+        db: ExperimentDB | None = None,
+        run_id: int | None = None,
+    ):
         self.df = df
         self.cfg = cfg
         self.symbol = symbol
         self.source = source
         self.timeframe = timeframe
-        self.db = ExperimentDB(get(cfg, "experiments.db_path"))
+        # An unattended session shares one DB handle and tags every experiment
+        # with its run id, so the morning report can scope to that session.
+        self.db = db or ExperimentDB(get(cfg, "experiments.db_path"))
+        self.run_id = run_id
         self.generated_dir = Path(get(cfg, "experiments.generated_code_dir"))
         self.generated_dir.mkdir(parents=True, exist_ok=True)
         self.llm = make_client(get(cfg, "agent.provider"), get(cfg, "agent.model"))
@@ -86,7 +99,8 @@ class AgentLoop:
         try:
             report = run_gauntlet(self.df, strategy, self.cfg, n_trials=n_trials)
         except Exception:  # noqa: BLE001
-            return {"ok": False, "promoted": False, "reasons": ["FAIL gauntlet crash"],
+            # same label the sandbox runner uses, so the report histograms agree
+            return {"ok": False, "promoted": False, "reasons": ["FAIL strategy runtime"],
                     "checks": {}, "error": traceback.format_exc(limit=3)}
         return {"ok": True, "promoted": report.promoted, "reasons": report.reasons,
                 "checks": report.checks, "error": None,
@@ -142,7 +156,7 @@ class GeneratedSma(Strategy):
                 symbol=self.symbol, source=self.source, timeframe=self.timeframe,
                 strategy_name="(proposal)", hypothesis="", params={},
                 code=None, promoted=False, metrics=None, gauntlet_checks=None,
-                reasons=["FAIL proposal"], error=err,
+                reasons=["FAIL proposal"], error=err, run_id=self.run_id,
             )
             return {"id": exp_id, "promoted": False, "error": err}
 
@@ -171,6 +185,7 @@ class GeneratedSma(Strategy):
             strategy_name=name, hypothesis=hypothesis, params=params,
             code=code, promoted=rep["promoted"], metrics=metrics,
             gauntlet_checks=checks, reasons=rep["reasons"], error=rep["error"],
+            run_id=self.run_id,
         )
 
         if rep["promoted"]:
@@ -178,6 +193,7 @@ class GeneratedSma(Strategy):
 
         return {
             "id": exp_id,
+            "symbol": self.symbol,
             "promoted": rep["promoted"],
             "strategy": name,
             "hypothesis": hypothesis,

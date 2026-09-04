@@ -8,6 +8,12 @@ Writes:
     /work/report.json   - {"ok": bool, "promoted": bool, "reasons": [...],
                            "checks": {...}, "error": str|None}
 
+Failures are attributed to a phase rather than lumped together, because the
+caller acts on the difference: a `FAIL codegen` earns an LLM fix-retry, while a
+`FAIL gauntlet crash` is a harness bug. The morning report histograms the same
+labels, so "the model can't write valid code" never gets mistaken for "the ideas
+don't survive validation".
+
 This process has no network, a read-only root fs, dropped capabilities, and
 resource limits (set by the host launcher). Even if the strategy code is
 malicious, it is contained here.
@@ -24,6 +30,11 @@ WORK = Path("/work")
 
 def main() -> int:
     out = {"ok": False, "promoted": False, "reasons": [], "checks": {}, "error": None}
+
+    def fail(stage: str) -> None:
+        out["reasons"] = [f"FAIL {stage}"]
+        out["error"] = traceback.format_exc(limit=4)
+
     try:
         import pandas as pd
 
@@ -35,10 +46,23 @@ def main() -> int:
         params = json.loads((WORK / "params.json").read_text())
         cfg = params["config"]
         n_trials = int(params.get("n_trials", 1))
+    except Exception:  # noqa: BLE001
+        fail("sandbox setup")
+        (WORK / "report.json").write_text(json.dumps(out, default=str))
+        return 0
 
-        strategy_cls = load_strategy_class(code)
-        strategy = strategy_cls()
+    # Phase 1: compile + instantiate. Both are generated code, so both are the
+    # model's fault and both are worth one fix-retry.
+    try:
+        strategy = load_strategy_class(code)()
+    except Exception:  # noqa: BLE001
+        fail("codegen")
+        (WORK / "report.json").write_text(json.dumps(out, default=str))
+        return 0
 
+    # Phase 2: validation. A crash in here is usually still the strategy's fault
+    # (bad indexing, NaNs), so keep its name for the report.
+    try:
         report = run_gauntlet(df, strategy, cfg, n_trials=n_trials)
         out.update(
             ok=True,
@@ -49,7 +73,9 @@ def main() -> int:
             params=strategy.params,
         )
     except Exception:  # noqa: BLE001
-        out["error"] = traceback.format_exc(limit=4)
+        fail("strategy runtime")
+        out["strategy_name"] = getattr(strategy, "name", None)
+        out["params"] = getattr(strategy, "params", {})
 
     (WORK / "report.json").write_text(json.dumps(out, default=str))
     return 0
