@@ -31,8 +31,11 @@ experiments:
   generated_code_dir: experiments/generated
 
 agent:
-  provider: anthropic
-  model: claude-sonnet-4-5-20250929
+  # provider: ollama (local, free) | anthropic (API)
+  provider: ollama
+  # For ollama, use a coder-tuned model for best code generation.
+  # e.g. qwen2.5-coder:7b / qwen2.5-coder:14b. qwen3.5:9b also works.
+  model: qwen3.5:9b
   max_iterations: 10
   # Number of past experiments (worst + best) fed back as "lessons learned".
   memory_context_n: 8

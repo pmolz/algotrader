@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ..strategies.base import Strategy
+from ..strategies.base import Strategy, coerce_positions
 
 
 def lookahead_check(
@@ -27,7 +27,7 @@ def lookahead_check(
     A violation means the signal at some past bar changed when future data was
     revealed — i.e. the strategy used information it shouldn't have.
     """
-    full = strategy.generate_signals(df).positions.reindex(df.index).fillna(0.0).to_numpy()
+    full = coerce_positions(strategy.generate_signals(df).positions, df.index).to_numpy()
     n = len(df)
     violations = []
     checked = 0
@@ -38,12 +38,9 @@ def lookahead_check(
         if cut < 2:
             continue
         truncated = df.iloc[:cut]
-        trunc_sig = (
-            strategy.generate_signals(truncated)
-            .positions.reindex(truncated.index)
-            .fillna(0.0)
-            .to_numpy()
-        )
+        trunc_sig = coerce_positions(
+            strategy.generate_signals(truncated).positions, truncated.index
+        ).to_numpy()
         checked += 1
         # compare overlapping region [0, cut)
         diff = np.abs(trunc_sig - full[:cut])

@@ -46,10 +46,23 @@ def _screen(code: str) -> None:
             raise ValueError(f"Refusing to exec generated code containing {bad!r}")
 
 
+# generated code may only import from this whitelist (models often add imports
+# despite instructions). Everything else raises ImportError.
+_ALLOWED_IMPORTS = {"pandas", "numpy", "math", "pandas as pd", "numpy as np"}
+
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    root = name.split(".")[0]
+    if root not in {"pandas", "numpy", "math"}:
+        raise ImportError(f"Import of {name!r} not allowed in generated strategy.")
+    return __import__(name, globals, locals, fromlist, level)
+
+
 def load_strategy_class(code: str) -> Type[Strategy]:
     """Exec the code in a restricted namespace and return the Strategy subclass.
 
-    Only pd, np, Strategy, StrategyResult are exposed. Builtins are limited.
+    Only pd, np, Strategy, StrategyResult are exposed, plus a whitelisted import
+    hook allowing pandas/numpy/math. Builtins are limited.
     """
     _screen(code)
 
@@ -59,6 +72,7 @@ def load_strategy_class(code: str) -> Type[Strategy]:
         "dict": dict, "enumerate": enumerate, "zip": zip, "round": round,
         "print": print, "isinstance": isinstance, "super": super,
         "__build_class__": __build_class__, "__name__": "generated_strategy",
+        "__import__": _safe_import,
     }
     ns: dict = {
         "pd": pd, "np": np,

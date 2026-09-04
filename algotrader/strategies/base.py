@@ -52,3 +52,21 @@ class Strategy:
 
     def describe(self) -> dict:
         return {"name": self.name, "params": self.params}
+
+
+def coerce_positions(positions, index: pd.Index) -> pd.Series:
+    """Normalize whatever a strategy returned into a float Series on `index`.
+
+    Generated strategies sometimes return a numpy array, a list, or a Series with
+    a different index. This makes the rest of the pipeline robust to that.
+    """
+    if isinstance(positions, pd.Series):
+        s = positions.reindex(index)
+    else:
+        arr = pd.array(positions) if not hasattr(positions, "__len__") else positions
+        if len(arr) != len(index):
+            raise ValueError(
+                f"positions length {len(arr)} != number of bars {len(index)}"
+            )
+        s = pd.Series(list(arr), index=index)
+    return s.astype(float).fillna(0.0)

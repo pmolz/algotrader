@@ -23,7 +23,7 @@ from ..config import get
 from ..strategies.base import Strategy
 from ..validation.gauntlet import run_gauntlet
 from .codegen import load_strategy_class, parse_response
-from .llm import AnthropicClient
+from .llm import make_client
 from .memory import ExperimentDB
 from .prompts import FIX_TEMPLATE, PROPOSE_TEMPLATE, SYSTEM_PROMPT
 
@@ -38,7 +38,10 @@ class AgentLoop:
         self.db = ExperimentDB(get(cfg, "experiments.db_path"))
         self.generated_dir = Path(get(cfg, "experiments.generated_code_dir"))
         self.generated_dir.mkdir(parents=True, exist_ok=True)
-        self.llm = AnthropicClient(get(cfg, "agent.model"))
+        self.llm = make_client(get(cfg, "agent.provider"), get(cfg, "agent.model"))
+
+    def _llm_ready(self) -> bool:
+        return self.llm is not None and self.llm.available()
 
     # -- generation ---------------------------------------------------------------
     def _propose(self) -> tuple[str, str, str]:
@@ -46,7 +49,7 @@ class AgentLoop:
         lessons = self.db.lessons_context(
             n_recent=get(self.cfg, "agent.memory_context_n", 8)
         )
-        if self.llm.available():
+        if self._llm_ready():
             user = PROPOSE_TEMPLATE.format(
                 symbol=self.symbol, timeframe=self.timeframe,
                 source=self.source, lessons=lessons,
@@ -82,7 +85,17 @@ class GeneratedSma(Strategy):
 
     # -- one iteration ------------------------------------------------------------
     def step(self) -> dict:
-        hypothesis, code, gen_src = self._propose()
+        try:
+            hypothesis, code, gen_src = self._propose()
+        except Exception as e:  # noqa: BLE001
+            err = f"proposal failed: {type(e).__name__}: {e}"
+            exp_id = self.db.record(
+                symbol=self.symbol, source=self.source, timeframe=self.timeframe,
+                strategy_name="(proposal)", hypothesis="", params={},
+                code=None, promoted=False, metrics=None, gauntlet_checks=None,
+                reasons=["FAIL proposal"], error=err,
+            )
+            return {"id": exp_id, "promoted": False, "error": err}
 
         strategy = None
         error = None
@@ -92,7 +105,7 @@ class GeneratedSma(Strategy):
                 break
             except Exception as e:  # noqa: BLE001
                 error = f"{type(e).__name__}: {e}"
-                if self.llm.available() and attempt == 0:
+                if self._llm_ready() and attempt == 0:
                     text = self.llm.complete(
                         SYSTEM_PROMPT, FIX_TEMPLATE.format(error=error, code=code)
                     )

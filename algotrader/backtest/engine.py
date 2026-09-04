@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from ..strategies.base import Strategy
+from ..strategies.base import Strategy, coerce_positions
 from .metrics import compute_metrics
 
 
@@ -52,7 +52,7 @@ def backtest(
 ) -> BacktestResult:
     """Run a strategy over OHLCV data and return performance."""
     sig = strategy.generate_signals(df)
-    target = sig.positions.reindex(df.index).fillna(0.0)
+    target = coerce_positions(sig.positions, df.index)
 
     if not allow_short:
         target = target.clip(lower=0.0)
