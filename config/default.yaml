@@ -4,6 +4,9 @@ data:
   cache_dir: data_cache
   default_source: ccxt        # ccxt | yfinance
   default_timeframe: 1d
+  # Public OHLCV venue for the ccxt source. Binance blocks some regions; bitstamp
+  # and kraken serve public daily history without a key from anywhere.
+  ccxt_exchange: bitstamp
 
 backtest:
   initial_cash: 10000.0
@@ -33,15 +36,42 @@ experiments:
 agent:
   # provider: ollama (local, free) | anthropic (API)
   provider: ollama
-  # For ollama, use a coder-tuned model for best code generation.
-  # e.g. qwen2.5-coder:7b / qwen2.5-coder:14b. qwen3.5:9b also works.
-  model: qwen3.5:9b
+  # For ollama, use a coder-tuned model — general models fail the codegen phase
+  # far more often (measured: qwen3.5:9b produced 3 unusable strategies out of 4).
+  # Step up to qwen2.5-coder:14b if the machine has the headroom.
+  model: qwen2.5-coder:7b
   max_iterations: 10
   # Number of past experiments (worst + best) fed back as "lessons learned".
   memory_context_n: 8
   # Run untrusted generated code inside a Docker jail (Phase 2). Strongly
   # recommended before any unattended/overnight runs. Requires: bash sandbox/build.sh
   use_sandbox: false
+
+nightly:
+  # Markets the unattended session rotates through, one iteration each in turn.
+  # Either a plain symbol (uses data.default_source/timeframe) or a mapping.
+  symbols:
+    - symbol: BTC/USD
+      source: ccxt
+      timeframe: 1d
+    - symbol: ETH/USD
+      source: ccxt
+      timeframe: 1d
+    - symbol: SPY
+      source: yfinance
+      timeframe: 1d
+  # Wall-clock budget. The session refuses to start an iteration it can't finish.
+  max_hours: 8.0
+  # Optional hard cap on iterations (null = only the clock stops it).
+  max_iterations: null
+  # Have the agent summarize its own progress every N iterations (0 = only at
+  # the end). Reflections are stored and fed back into later proposals.
+  reflect_every: 10
+  log_dir: experiments/logs
+  report_dir: experiments/reports
+  lock_file: experiments/nightly.lock
+  # Morning report window starts at this local hour on the previous day.
+  report_window_start_hour: 18
 
 sandbox:
   image: algotrader-sandbox:latest

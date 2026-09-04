@@ -25,12 +25,14 @@ def main():
     ap.add_argument("--limit", type=int, default=1000)
     ap.add_argument("--period", default="5y")
     ap.add_argument("--refresh", action="store_true")
+    ap.add_argument("--exchange", default=get(cfg, "data.ccxt_exchange", "bitstamp"),
+                    help="ccxt venue (some, e.g. binance, are geo-restricted)")
     args = ap.parse_args()
 
     df = fetch(
         args.symbol, source=args.source, timeframe=args.timeframe,
         cache_dir=get(cfg, "data.cache_dir"), limit=args.limit,
-        period=args.period, refresh=args.refresh,
+        period=args.period, refresh=args.refresh, exchange=args.exchange,
     )
     print(f"Fetched {len(df)} bars for {args.symbol} [{args.source} {args.timeframe}]")
     print(df.tail())

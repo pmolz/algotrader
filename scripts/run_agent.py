@@ -38,7 +38,8 @@ def main():
         cfg["agent"]["use_sandbox"] = False
 
     df = fetch(args.symbol, source=args.source, timeframe=args.timeframe,
-               cache_dir=get(cfg, "data.cache_dir"))
+               cache_dir=get(cfg, "data.cache_dir"),
+               exchange=get(cfg, "data.ccxt_exchange", "bitstamp"))
 
     loop = AgentLoop(df, cfg, symbol=args.symbol, source=args.source,
                      timeframe=args.timeframe)

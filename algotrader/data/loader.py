@@ -20,6 +20,12 @@ import pandas as pd
 
 CANONICAL_COLS = ["open", "high", "low", "close", "volume"]
 
+# Which ccxt venue to pull public OHLCV from. Not all exchanges serve every
+# region — Binance, for instance, refuses requests from some countries — so this
+# is configurable via `data.ccxt_exchange`. Bitstamp serves ~1000 daily bars of
+# public history without a key, which is enough for the validation gauntlet.
+DEFAULT_EXCHANGE = "bitstamp"
+
 
 def _slug(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_").lower()
@@ -48,10 +54,14 @@ def _validate(df: pd.DataFrame) -> pd.DataFrame:
     return df[CANONICAL_COLS]
 
 
-def _fetch_ccxt(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+def _fetch_ccxt(
+    symbol: str, timeframe: str, limit: int, exchange: str = DEFAULT_EXCHANGE
+) -> pd.DataFrame:
     import ccxt  # lazy import so the package works without it installed
 
-    ex = ccxt.binance({"enableRateLimit": True})
+    if not hasattr(ccxt, exchange):
+        raise ValueError(f"Unknown ccxt exchange: {exchange!r}")
+    ex = getattr(ccxt, exchange)({"enableRateLimit": True})
     raw = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
@@ -78,6 +88,7 @@ def fetch(
     limit: int = 1000,
     period: str = "5y",
     refresh: bool = False,
+    exchange: str = DEFAULT_EXCHANGE,
 ) -> pd.DataFrame:
     """Fetch OHLCV, using cache unless refresh=True.
 
@@ -87,6 +98,7 @@ def fetch(
         timeframe: e.g. '1d', '1h', '1wk'
         limit:     max bars (ccxt)
         period:    lookback window (yfinance), e.g. '5y', '10y', 'max'
+        exchange:  ccxt venue to query (some are geo-restricted)
     """
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -97,7 +109,7 @@ def fetch(
             return cached
 
     if source == "ccxt":
-        df = _fetch_ccxt(symbol, timeframe, limit)
+        df = _fetch_ccxt(symbol, timeframe, limit, exchange=exchange)
     elif source == "yfinance":
         df = _fetch_yfinance(symbol, timeframe, period)
     else:
