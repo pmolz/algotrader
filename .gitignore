@@ -13,6 +13,9 @@ data_cache/*.parquet
 data_cache/*.csv
 experiments/*.db
 experiments/generated/
+experiments/logs/
+experiments/reports/
+experiments/*.lock
 .env
 config/secrets.yaml
 

@@ -51,6 +51,27 @@ HYPOTHESIS: <one or two sentences describing the idea and why it might work>
 ```
 """
 
+REFLECT_SYSTEM = """\
+You are a quantitative research lead reviewing an overnight batch of automated \
+strategy experiments. Be blunt and specific. Most batches contain no real edge — \
+saying so is the correct answer, not a failure. Never suggest loosening the \
+validation thresholds or reusing the out-of-sample holdout to rescue a result.
+"""
+
+REFLECT_TEMPLATE = """\
+An unattended session just finished. Here is what happened:
+
+{summary}
+
+Write a short reflection (at most 150 words, plain prose, no headings) covering:
+1. What the failure pattern says about which families of ideas are dead ends here.
+2. Two or three concretely different directions worth trying next session.
+3. Any sign that the results are noise-mining rather than a real edge.
+
+This text is fed back to you as context before your next proposals, so write it \
+as instructions to your future self.
+"""
+
 FIX_TEMPLATE = """\
 Your previous strategy failed to run or failed the lookahead check:
 

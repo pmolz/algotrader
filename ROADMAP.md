@@ -18,13 +18,18 @@ Build trust from the bottom up. Do not skip Phase 0.
 - [x] LLM strategy proposer (structured hypothesis)
 - [x] LLM strategy code generator against the strategy interface
 - [ ] Human reviews each generated strategy before it runs
-- [ ] "Lessons learned" memory the LLM retrieves before proposing
+- [x] "Lessons learned" memory the LLM retrieves before proposing
 
 ## Phase 2 — Automated loop
 - [x] Docker sandbox per generated strategy (untrusted code!)
 - [x] Multiple-testing bookkeeping across all experiments (n_trials from DB)
-- [ ] Overnight cron loop: propose -> code -> validate -> log -> reflect
-- [ ] Morning report generation
+- [x] Overnight cron loop: propose -> code -> validate -> log -> reflect
+- [x] Morning report generation
+
+Phase 2 is complete — see `docs/NIGHTLY.md`. The loop is unattended-safe (sandbox
+required, PID lock, per-iteration error isolation, wall-clock + iteration
+budgets, graceful signals) and cumulative (the agent's own session reflections
+are stored and fed back into later proposals).
 
 ## Phase 3 — Forward testing
 - [ ] Auto-promote gauntlet survivors to Alpaca paper trading

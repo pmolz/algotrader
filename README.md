@@ -37,7 +37,9 @@ Package layout:
 | `algotrader/sentiment`  | Free sentiment sources (Reddit, GDELT, Fear & Greed) |
 | `algotrader/agent`      | LLM loop: propose -> code -> evaluate -> reflect |
 | `algotrader/live`       | Paper/live trading adapters (Alpaca paper first) |
-| `experiments/`          | SQLite experiment log + generated strategy code |
+| `algotrader/agent/nightly.py` | Unattended overnight session (budgets, locking, reflection) |
+| `algotrader/agent/report.py`  | Morning report generator |
+| `experiments/`          | SQLite experiment log, generated code, logs, reports |
 
 ## Quick start
 
@@ -47,14 +49,40 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 # 1. pull and cache some data
-python scripts/fetch_data.py --symbol BTC/USDT --source ccxt --timeframe 1d
+python scripts/fetch_data.py --symbol BTC/USD --source ccxt --timeframe 1d
 
 # 2. run the built-in baseline strategies through the gauntlet
-python scripts/run_backtest.py --strategy sma_crossover --symbol BTC/USDT
+python scripts/run_backtest.py --strategy sma_crossover --symbol BTC/USD
 
-# 3. (later) run the agent loop
-python scripts/run_agent.py --symbol BTC/USDT --iterations 5
+# 3. run the agent loop
+python scripts/run_agent.py --symbol BTC/USD --iterations 5 --sandbox
+
+# 4. hand it the night, read the report over coffee
+bash sandbox/build.sh
+python scripts/run_nightly.py --hours 0.1 --max-iterations 2   # supervised trial
+bash scripts/install_cron.sh                                   # dry run first
 ```
+
+> `data.ccxt_exchange` defaults to `bitstamp`, not Binance — Binance refuses
+> public OHLCV requests from some regions. Any ccxt venue works.
+
+## Overnight loop + morning report
+
+```bash
+python scripts/run_nightly.py       # one unattended session (cron calls this)
+python scripts/morning_report.py    # experiments/reports/YYYY-MM-DD.md
+bash scripts/install_cron.sh        # show the crontab entries; --install applies
+```
+
+A session round-robins your configured symbols, spends its wall-clock budget
+proposing and judging candidates, survives crashes and dead data sources, and
+reflects on its own results so the next session starts smarter. It **refuses to
+run with the sandbox off**. The report is written to be un-flattering: "nothing
+promoted" is the healthy headline, a survivor is framed as suspicious until
+reviewed, and a night where most candidates failed to compile is called a wasted
+night rather than a clean result.
+
+Full details, systemd-timer alternative, and troubleshooting: **[docs/NIGHTLY.md](docs/NIGHTLY.md)**.
 
 ## Using a local model (Ollama / Qwen) — free & private
 
