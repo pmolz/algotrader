@@ -6,6 +6,7 @@ venv/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+**/__pycache__/
 
 # Data & secrets — never commit these
 data_cache/*.parquet
