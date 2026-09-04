@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "algotrader"
+version = "0.1.0"
+description = "A self-improving algorithmic trading research agent"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "pyarrow>=14.0",        # parquet cache
+    "pyyaml>=6.0",
+    "yfinance>=0.2.40",     # free (delayed) equities data
+    "ccxt>=4.0",            # free crypto exchange data
+]
+
+[project.optional-dependencies]
+agent = [
+    "anthropic>=0.40",      # LLM proposer/coder (swap for openai/local as you like)
+]
+sentiment = [
+    "praw>=7.7",            # Reddit
+    "transformers>=4.40",   # FinBERT sentiment (optional, heavy)
+    "torch>=2.0",
+]
+live = [
+    "alpaca-py>=0.30",      # paper + live trading
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "ipython",
+]
+
+[tool.setuptools.packages.find]
+include = ["algotrader*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

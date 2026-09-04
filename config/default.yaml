@@ -1,0 +1,38 @@
+# Default configuration. Override per-run on the CLI or with config/local.yaml.
+
+data:
+  cache_dir: data_cache
+  default_source: ccxt        # ccxt | yfinance
+  default_timeframe: 1d
+
+backtest:
+  initial_cash: 10000.0
+  fee_pct: 0.001              # 0.1% per trade (round-trip modelled per fill)
+  slippage_pct: 0.0005       # 0.05% assumed slippage per fill
+  allow_short: false
+
+validation:
+  # Fraction of history reserved as a final holdout the agent must never see.
+  oos_holdout_frac: 0.2
+  # Walk-forward
+  walk_forward_train_frac: 0.6
+  walk_forward_n_splits: 5
+  # Cost sensitivity: re-run at these multiples of modelled cost. Edge must survive.
+  cost_stress_multipliers: [1.0, 1.5, 2.0]
+  # Minimum bars required to accept a strategy result as meaningful.
+  min_trades: 30
+  # Promotion thresholds (must pass ALL to advance to paper trading).
+  min_sharpe: 1.0
+  min_deflated_sharpe: 0.0   # deflated Sharpe > 0 => edge likely survives multiple testing
+  max_drawdown_pct: 0.35
+
+experiments:
+  db_path: experiments/experiments.db
+  generated_code_dir: experiments/generated
+
+agent:
+  provider: anthropic
+  model: claude-sonnet-4-5-20250929
+  max_iterations: 10
+  # Number of past experiments (worst + best) fed back as "lessons learned".
+  memory_context_n: 8

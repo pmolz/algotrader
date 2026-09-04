@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Data & secrets — never commit these
+data_cache/*.parquet
+data_cache/*.csv
+experiments/*.db
+experiments/generated/
+.env
+config/secrets.yaml
+
+# OS
+.DS_Store
