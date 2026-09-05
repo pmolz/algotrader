@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Reports · algotrader{% endblock %}
+{% block filters %}{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h2>Morning reports</h2>
+  <p class="sub">Generated after each session by <span class="mono">scripts/morning_report.py</span>.</p>
+  {% if files %}
+    <form class="filters" method="get" style="margin-bottom:0">
+      <label for="f">Report</label>
+      <select name="f" id="f" onchange="this.form.submit()">
+        {% for name in files %}
+          <option value="{{ name }}" {{ 'selected' if name == which }}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  {% else %}
+    <div class="empty">No reports yet. Run <span class="mono">python scripts/morning_report.py</span>.</div>
+  {% endif %}
+</div>
+
+{% if body %}
+<div class="card report-body">
+  {# Rendered as preformatted text on purpose: a report is model-influenced
+     content, and running it through an HTML renderer would be an injection
+     surface for no real gain. #}
+  <pre>{{ body }}</pre>
+</div>
+{% endif %}
+{% endblock %}

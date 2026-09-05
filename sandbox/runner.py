@@ -1,9 +1,15 @@
 """In-container entrypoint. Runs the validation gauntlet on an untrusted strategy.
 
+Two modes, selected by `mode` in params.json:
+    "gauntlet" (default) - run the full validation gauntlet, return the verdict
+    "equity"             - backtest once and return the equity curve, for the
+                           dashboard's chart. Read-only in spirit: it promotes
+                           nothing and writes nothing to the experiment DB.
+
 Reads from the bind-mounted /work directory:
     /work/strategy.py   - the LLM-generated strategy code (untrusted)
     /work/data.parquet  - OHLCV data
-    /work/params.json   - {"config": {...}, "n_trials": int}
+    /work/params.json   - {"config": {...}, "n_trials": int, "mode": str}
 Writes:
     /work/report.json   - {"ok": bool, "promoted": bool, "reasons": [...],
                            "checks": {...}, "error": str|None}
@@ -46,6 +52,7 @@ def main() -> int:
         params = json.loads((WORK / "params.json").read_text())
         cfg = params["config"]
         n_trials = int(params.get("n_trials", 1))
+        mode = params.get("mode", "gauntlet")
     except Exception:  # noqa: BLE001
         fail("sandbox setup")
         (WORK / "report.json").write_text(json.dumps(out, default=str))
@@ -57,6 +64,45 @@ def main() -> int:
         strategy = load_strategy_class(code)()
     except Exception:  # noqa: BLE001
         fail("codegen")
+        (WORK / "report.json").write_text(json.dumps(out, default=str))
+        return 0
+
+    # Phase 2a: equity mode — one backtest, curve returned for plotting.
+    if mode == "equity":
+        try:
+            from algotrader.backtest.engine import backtest
+            from algotrader.strategies.baselines import BuyAndHold
+
+            bt = cfg["backtest"]
+            kw = dict(
+                initial_cash=bt["initial_cash"], fee_pct=bt["fee_pct"],
+                slippage_pct=bt["slippage_pct"], allow_short=bt["allow_short"],
+            )
+            res = backtest(df, strategy, **kw)
+            bh = backtest(df, BuyAndHold(), **kw)
+            # The holdout boundary is drawn on the chart so you can see which part
+            # of the curve the strategy was developed against.
+            frac = float(cfg["validation"]["oos_holdout_frac"])
+            split_i = int(len(df) * (1 - frac))
+            out.update(
+                ok=True,
+                mode="equity",
+                strategy_name=strategy.name,
+                params=strategy.params,
+                dates=[t.isoformat() for t in res.equity_curve.index],
+                equity=[float(v) for v in res.equity_curve.to_numpy()],
+                benchmark=[float(v) for v in bh.equity_curve.to_numpy()],
+                positions=[float(v) for v in res.positions.to_numpy()],
+                trades=int(res.trades),
+                metrics={k: float(v) for k, v in res.metrics.items()},
+                benchmark_metrics={k: float(v) for k, v in bh.metrics.items()},
+                holdout_start=(
+                    df.index[split_i].isoformat() if 0 < split_i < len(df) else None
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            fail("strategy runtime")
+            out["strategy_name"] = getattr(strategy, "name", None)
         (WORK / "report.json").write_text(json.dumps(out, default=str))
         return 0
 

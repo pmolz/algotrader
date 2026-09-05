@@ -39,6 +39,7 @@ Package layout:
 | `algotrader/live`       | Paper/live trading adapters (Alpaca paper first) |
 | `algotrader/agent/nightly.py` | Unattended overnight session (budgets, locking, reflection) |
 | `algotrader/agent/report.py`  | Morning report generator |
+| `algotrader/dashboard`  | Local read-only web UI over the experiment log |
 | `experiments/`          | SQLite experiment log, generated code, logs, reports |
 
 ## Quick start
@@ -83,6 +84,23 @@ reviewed, and a night where most candidates failed to compile is called a wasted
 night rather than a clean result.
 
 Full details, systemd-timer alternative, and troubleshooting: **[docs/NIGHTLY.md](docs/NIGHTLY.md)**.
+
+## Dashboard
+
+```bash
+pip install -e ".[dashboard]"
+python scripts/dashboard.py     # http://127.0.0.1:8765
+```
+
+Browse the whole experiment log: overview stats, where candidates die, per-day
+activity, the full history, and each candidate's evidence — hypothesis, every
+gauntlet check, walk-forward fold Sharpes, cost stress, the generated code, and
+an on-demand equity curve.
+
+It opens the DB **read-only** and cannot write to the log the agent is appending
+to. Plotting an equity curve necessarily *runs* strategy code, so that happens
+inside the same Docker jail the nightly loop uses, and the result is cached.
+Loopback-only, no auth — see **[docs/DASHBOARD.md](docs/DASHBOARD.md)**.
 
 ## Using a local model (Ollama / Qwen) — free & private
 

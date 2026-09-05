@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Experiments · algotrader{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h2>Experiment history</h2>
+  <p class="sub">
+    {{ stats.total }} candidates in this range · {{ stats.promoted }} promoted ·
+    {{ stats.unjudged }} never judged. Click an id for the full evidence.
+  </p>
+  {% include "_experiment_rows.html" with context %}
+</div>
+{% endblock %}

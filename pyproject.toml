@@ -29,6 +29,9 @@ sentiment = [
 live = [
     "alpaca-py>=0.30",      # paper + live trading
 ]
+dashboard = [
+    "flask>=3.0",           # local read-only web UI over the experiment log
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",

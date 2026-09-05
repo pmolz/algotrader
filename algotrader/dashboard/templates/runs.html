@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Sessions · algotrader{% endblock %}
+{% block filters %}{% endblock %}
+
+{% block content %}
+
+<div class="card">
+  <h2>Sessions</h2>
+  <p class="sub">
+    Every unattended run. A session with no finish time was killed — the machine
+    slept, ran out of memory, or the process was stopped.
+  </p>
+  {% if runs %}
+  <table>
+    <thead><tr>
+      <th>#</th><th>Kind</th><th>Started</th><th class="num">Duration</th>
+      <th class="num">Iters</th><th class="num">Promoted</th><th class="num">Errors</th>
+      <th>Stopped because</th><th>Sandbox</th><th>Model</th>
+    </tr></thead>
+    <tbody>
+      {% for r in runs %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.kind or '—' }}</td>
+        <td class="muted">{{ r.started_at | ts }}</td>
+        <td class="num">{{ r.duration_s | dur }}</td>
+        <td class="num">{{ r.iterations or 0 }}</td>
+        <td class="num">{{ r.promoted or 0 }}</td>
+        <td class="num">{{ r.errors or 0 }}</td>
+        <td>
+          {% if r.unfinished %}
+            <span class="badge warn"><span class="dot"></span>never finished</span>
+          {% else %}
+            <span class="badge neutral"><span class="dot"></span>{{ r.stop_reason }}</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if r.sandbox %}
+            <span class="badge good"><span class="dot"></span>on</span>
+          {% else %}
+            <span class="badge bad"><span class="dot"></span>OFF</span>
+          {% endif %}
+        </td>
+        <td class="mono muted">{{ r.provider }}/{{ r.model }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No sessions recorded yet.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>The agent's own reflections</h2>
+  <p class="sub">
+    Written at the end of each session (and every few iterations), then fed back
+    into later proposals. This is what makes the loop cumulative rather than
+    merely repetitive.
+  </p>
+  {% for r in reflections %}
+    <div style="margin-bottom:16px">
+      <div class="muted mono" style="font-size:11px">
+        {{ r.created_at | ts }} · session {{ r.run_id }} · {{ r.source }}
+      </div>
+      <p class="hypothesis" style="margin:4px 0 0">{{ r.text }}</p>
+    </div>
+  {% else %}
+    <div class="empty">No reflections yet.</div>
+  {% endfor %}
+</div>
+
+{% endblock %}

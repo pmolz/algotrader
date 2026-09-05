@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}Overview · algotrader{% endblock %}
+
+{% block content %}
+
+{# The hero leads with the number that matters. Zero promoted is the healthy
+   result, so it is stated plainly rather than dressed up as a problem. #}
+<div class="card">
+  <div class="hero">
+    <div class="figure">{{ stats.promoted }}</div>
+    <div class="caption">
+      {% if stats.total == 0 %}
+        <strong>No experiments in this range.</strong> Widen the range, or check
+        that the nightly session is actually running.
+      {% elif stats.wasted %}
+        promoted out of {{ stats.total }} — but
+        <strong>{{ stats.unjudged }} never reached a verdict</strong>, so this
+        slice says nothing about the markets, only about the model writing the code.
+      {% elif stats.promoted == 0 %}
+        promoted out of {{ stats.total }} candidates. <strong>This is the expected
+        outcome.</strong> The gauntlet is doing its job; no action needed.
+      {% else %}
+        promoted out of {{ stats.total }}. Treat survivors as
+        <strong>suspicious until reviewed</strong> — after
+        {{ stats.lifetime_trials }} lifetime trials, a survivor is most often a
+        multiple-testing artifact.
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% if stats.wasted %}
+<div class="callout">
+  <h3>Wasted slice — {{ stats.unjudged }}/{{ stats.total }} candidates never reached a verdict</h3>
+  <p>Most candidates failed to compile or crashed while running. That is a
+     code-generation problem, not a market signal. Pull a larger coder model
+     (<span class="mono">ollama pull qwen2.5-coder:14b</span>) before drawing conclusions.</p>
+</div>
+{% endif %}
+
+<div class="kpis" style="margin-bottom:18px">
+  <div class="tile">
+    <div class="label">Candidates tried</div>
+    <div class="value">{{ stats.total }}</div>
+    <div class="note">{{ stats.judged }} reached a verdict</div>
+  </div>
+  <div class="tile">
+    <div class="label">Reached a verdict</div>
+    <div class="value">{{ stats.judged_pct | pct }}</div>
+    <div class="note">{{ stats.unjudged }} did not</div>
+  </div>
+  <div class="tile">
+    <div class="label">Best rejected Sharpe</div>
+    <div class="value">{{ stats.best_rejected_sharpe | num }}</div>
+    <div class="note">out-of-sample, not a shortlist</div>
+  </div>
+  <div class="tile">
+    <div class="label">Sessions</div>
+    <div class="value">{{ stats.sessions if stats.sessions is not none else '—' }}</div>
+    <div class="note">in this range</div>
+  </div>
+  <div class="tile">
+    <div class="label">Lifetime trials</div>
+    <div class="value">{{ stats.lifetime_trials }}</div>
+    <div class="note">raises the bar; only goes up</div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Where candidates died</h2>
+    <p class="sub">The stage that rejected each candidate. Deaths at walk-forward are the healthy shape.</p>
+    <div class="chart" id="stage-chart"></div>
+  </div>
+
+  <div class="card">
+    <h2>Activity by day</h2>
+    <p class="sub">Candidates per day, split by verdict.</p>
+    <div class="chart" id="activity-chart"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Closest rejections</h2>
+  <p class="sub">
+    Ranked by the most out-of-sample Sharpe available. These are <strong>not</strong>
+    a shortlist — re-testing them is how overfitting happens.
+  </p>
+  {% if near %}
+  <table>
+    <thead><tr>
+      <th>#</th><th>Symbol</th><th>Strategy</th>
+      <th class="num">Sharpe</th><th>Died at</th><th>Hypothesis</th>
+    </tr></thead>
+    <tbody>
+      {% for e in near %}
+      <tr>
+        <td><a href="/experiment/{{ e.id }}">{{ e.id }}</a></td>
+        <td>{{ e.symbol }}</td>
+        <td class="mono">{{ e.strategy_name }}</td>
+        <td class="num">{{ e.sharpe | num }}</td>
+        <td><span class="badge neutral"><span class="dot"></span>{{ e.stage }}</span></td>
+        <td class="wrap">{{ e.hypothesis | truncate(110) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">Nothing scored in this range.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Latest candidates</h2>
+  <p class="sub">Most recent first.</p>
+  {% include "_experiment_rows.html" with context %}
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { barsH, stacked } from "{{ url_for('static', filename='charts.js') }}";
+
+  const stages = {{ stages | tojson_safe | safe }};
+  const activity = {{ activity | tojson_safe | safe }};
+
+  const series = [
+    { key: 'rejected', label: 'Rejected by the gauntlet', color: '--series-1' },
+    { key: 'unjudged', label: 'Never judged (codegen/runtime)', color: '--series-2' },
+    { key: 'promoted', label: 'Promoted', color: '--series-3' },
+  ];
+
+  function draw() {
+    barsH(document.getElementById('stage-chart'),
+      stages.map(s => ({ label: s.stage, count: s.count, share: s.share })),
+      { categoryName: 'Stage', valueName: 'Candidates' });
+    stacked(document.getElementById('activity-chart'), activity, series);
+  }
+  draw();
+  // re-render on theme change so marks pick up the other mode's steps
+  window.addEventListener('theme-change', draw);
+</script>
+{% endblock %}

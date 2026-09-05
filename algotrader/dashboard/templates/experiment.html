@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}#{{ exp.id }} {{ exp.strategy_name }} · algotrader{% endblock %}
+{% block filters %}{% endblock %}
+
+{% block content %}
+
+<div class="card">
+  <h2>
+    #{{ exp.id }} <span class="mono">{{ exp.strategy_name }}</span>
+    {% if exp.promoted %}
+      <span class="badge good"><span class="dot"></span>promoted</span>
+    {% else %}
+      <span class="badge bad"><span class="dot"></span>rejected at {{ exp.stage }}</span>
+    {% endif %}
+  </h2>
+  <p class="sub">
+    {{ exp.symbol }} · {{ exp.timeframe }} · {{ exp.source }} ·
+    {{ exp.created_at | ts }}
+    {% if exp.run_id %} · session <a href="/runs">#{{ exp.run_id }}</a>{% endif %}
+  </p>
+  <p class="hypothesis">{{ exp.hypothesis or "(no hypothesis recorded)" }}</p>
+  {% if exp.params %}
+    <p class="mono muted" style="margin-top:10px">params: {{ exp.params | tojson_safe }}</p>
+  {% endif %}
+</div>
+
+{% if exp.promoted %}
+<div class="callout good">
+  <h3>Survived the gauntlet — suspicious until reviewed</h3>
+  <p>This is not good news yet. A survivor after many trials is most often a
+     multiple-testing artifact. Read the code below line by line for lookahead the
+     automated check could miss, then forward-test on paper.
+     Never straight to capital.</p>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Gauntlet verdict</h2>
+  <p class="sub">Each check in the order it ran. The first failure stops the run.</p>
+  <ul class="reasons">
+    {% for r in exp.reasons %}
+      <li>
+        {% if r.startswith('PASS') %}
+          <span class="badge good"><span class="dot"></span>pass</span>
+        {% elif r.startswith('FAIL') %}
+          <span class="badge bad"><span class="dot"></span>fail</span>
+        {% else %}
+          <span class="badge neutral"><span class="dot"></span>note</span>
+        {% endif %}
+        <span>{{ r }}</span>
+      </li>
+    {% else %}
+      <li class="muted">No checks recorded — this candidate died before the gauntlet.</li>
+    {% endfor %}
+  </ul>
+  {% if exp.error %}
+    <h2 style="margin-top:16px">Error</h2>
+    <pre class="code">{{ exp.error }}</pre>
+  {% endif %}
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Walk-forward fold Sharpes</h2>
+    <p class="sub">Out-of-sample Sharpe per time fold. Consistency across folds matters more than the mean.</p>
+    <div class="chart" id="folds-chart"></div>
+  </div>
+
+  <div class="card">
+    <h2>Cost stress</h2>
+    <p class="sub">Sharpe as modelled transaction costs are multiplied. An edge that dies at 1.5× was never an edge.</p>
+    <div class="chart" id="stress-chart"></div>
+  </div>
+</div>
+
+{% if exp.metrics %}
+<div class="card">
+  <h2>Recorded metrics</h2>
+  <p class="sub">As logged by the gauntlet — the final out-of-sample holdout where it got that far.</p>
+  <div class="kpis">
+    {% for k, v in exp.metrics.items() %}
+      <div class="tile">
+        <div class="label">{{ k.replace('_', ' ') }}</div>
+        <div class="value">{{ v | num }}</div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Equity curve</h2>
+  <p class="sub">
+    Re-runs this strategy inside the Docker jail — no network, read-only filesystem,
+    non-root, hard timeout. Takes a few seconds; the result is cached.
+  </p>
+  <button class="btn" id="equity-btn" {{ 'disabled' if not exp.code }}>
+    {{ 'Plot equity curve' if exp.code else 'No code stored for this candidate' }}
+  </button>
+  <span id="equity-status" class="muted" style="margin-left:10px"></span>
+  <div id="equity-meta" class="kpis" style="margin-top:14px;display:none"></div>
+  <div class="chart" id="equity-chart" style="margin-top:14px"></div>
+</div>
+
+{% if exp.code %}
+<div class="card">
+  <h2>Generated code</h2>
+  <p class="sub">Exactly what the model wrote. This is the artifact to read before trusting any result.</p>
+  <pre class="code">{{ exp.code }}</pre>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { columns, lines, fmt } from "{{ url_for('static', filename='charts.js') }}";
+
+  const folds = {{ folds | tojson_safe | safe }};
+  const stress = {{ stress | tojson_safe | safe }};
+  const minSharpe = {{ min_sharpe }};
+  let equity = null;
+
+  function drawStatic() {
+    columns(document.getElementById('folds-chart'),
+      folds.map(f => ({ label: f.fold, value: f.sharpe })),
+      { categoryName: 'Fold', valueName: 'Sharpe', threshold: minSharpe,
+        thresholdLabel: 'promotion threshold' });
+
+    const host = document.getElementById('stress-chart');
+    if (!stress.length) {
+      host.innerHTML = '<div class="empty">Not recorded — this candidate died before the cost stress test.</div>';
+    } else {
+      lines(host, stress.map(s => s.multiplier + '×'),
+        [{ label: 'Sharpe', color: '--series-1', values: stress.map(s => s.sharpe) }],
+        { xName: 'Cost multiple', yDecimals: 2, includeZero: true, height: 200 });
+    }
+  }
+
+  function drawEquity() {
+    if (!equity) return;
+    const host = document.getElementById('equity-chart');
+    const markerIndex = equity.holdout_start
+      ? equity.dates.findIndex(d => d >= equity.holdout_start) : -1;
+    lines(host, equity.dates.map(d => d.slice(0, 10)), [
+      { label: 'Strategy', color: '--series-1', values: equity.equity },
+      { label: 'Buy & hold', color: '--series-2', values: equity.benchmark },
+    ], { xName: 'Date', yDecimals: 0, markerIndex,
+         markerLabel: 'holdout begins', height: 280 });
+  }
+
+  drawStatic();
+  window.addEventListener('theme-change', () => { drawStatic(); drawEquity(); });
+
+  const btn = document.getElementById('equity-btn');
+  const status = document.getElementById('equity-status');
+  btn?.addEventListener('click', async () => {
+    btn.disabled = true;
+    status.textContent = 'Running in the sandbox…';
+    try {
+      const res = await fetch('/api/equity/{{ exp.id }}');
+      const data = await res.json();
+      if (!res.ok) {
+        status.textContent = data.error || 'Failed.';
+        btn.disabled = false;
+        return;
+      }
+      equity = data;
+      status.textContent = data.cached
+        ? 'From cache.'
+        : `Ran in ${data.elapsed_s}s inside the jail.`;
+
+      const meta = document.getElementById('equity-meta');
+      meta.textContent = '';
+      const tiles = [
+        ['Final equity', fmt(data.equity[data.equity.length - 1], 0)],
+        ['Buy & hold', fmt(data.benchmark[data.benchmark.length - 1], 0)],
+        ['Sharpe', fmt(data.metrics.sharpe, 2)],
+        ['Max drawdown', (data.metrics.max_drawdown * 100).toFixed(1) + '%'],
+        ['Trades', String(data.trades)],
+      ];
+      for (const [label, value] of tiles) {
+        const t = document.createElement('div');
+        t.className = 'tile';
+        const l = document.createElement('div'); l.className = 'label'; l.textContent = label;
+        const v = document.createElement('div'); v.className = 'value'; v.textContent = value;
+        t.appendChild(l); t.appendChild(v);
+        meta.appendChild(t);
+      }
+      meta.style.display = '';
+      drawEquity();
+    } catch (e) {
+      status.textContent = 'Request failed: ' + e.message;
+      btn.disabled = false;
+    }
+  });
+</script>
+{% endblock %}

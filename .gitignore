@@ -16,6 +16,7 @@ experiments/generated/
 experiments/logs/
 experiments/reports/
 experiments/*.lock
+experiments/equity_cache/
 .env
 config/secrets.yaml
 

@@ -70,9 +70,12 @@ def run_gauntlet_sandboxed(
     cfg: dict,
     n_trials: int = 1,
     limits: SandboxLimits | None = None,
+    mode: str = "gauntlet",
 ) -> dict:
-    """Run the gauntlet on `code` inside Docker. Returns the report dict:
+    """Run `code` inside Docker. Returns the report dict:
         {ok, promoted, reasons, checks, error, strategy_name?, params?}
+    or, with mode="equity", the curve dict:
+        {ok, dates, equity, benchmark, metrics, holdout_start, ...}
     Raises SandboxError on infrastructure failures (image missing, timeout, etc.).
     """
     limits = limits or SandboxLimits()
@@ -86,7 +89,7 @@ def run_gauntlet_sandboxed(
         (work / "strategy.py").write_text(code)
         df.to_parquet(work / "data.parquet")
         (work / "params.json").write_text(
-            json.dumps({"config": cfg, "n_trials": n_trials})
+            json.dumps({"config": cfg, "n_trials": n_trials, "mode": mode})
         )
 
         uid, gid = os.getuid(), os.getgid()

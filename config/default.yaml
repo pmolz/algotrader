@@ -73,6 +73,13 @@ nightly:
   # Morning report window starts at this local hour on the previous day.
   report_window_start_hour: 18
 
+dashboard:
+  host: 127.0.0.1           # loopback only; there is no auth on this app
+  port: 8765
+  # Equity curves are re-run in the sandbox and cached by (code, data, costs).
+  cache_dir: experiments/equity_cache
+  equity_timeout_s: 60
+
 sandbox:
   image: algotrader-sandbox:latest
   memory: 1g

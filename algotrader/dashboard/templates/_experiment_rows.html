@@ -1,0 +1,33 @@
+{# Shared candidate table. Verdict is icon + label, never color alone. #}
+{% set items = rows if rows is defined else recent %}
+{% if items %}
+<table>
+  <thead><tr>
+    <th>#</th><th>When</th><th>Symbol</th><th>Strategy</th>
+    <th>Verdict</th><th class="num">Sharpe</th><th>Hypothesis</th>
+  </tr></thead>
+  <tbody>
+    {% for e in items %}
+    <tr>
+      <td><a href="/experiment/{{ e.id }}">{{ e.id }}</a></td>
+      <td class="muted">{{ e.created_at | ts }}</td>
+      <td>{{ e.symbol }}</td>
+      <td class="mono">{{ e.strategy_name }}</td>
+      <td>
+        {% if e.promoted %}
+          <span class="badge good"><span class="dot"></span>promoted</span>
+        {% elif e.stage in ('codegen', 'strategy runtime', 'crash', 'sandbox setup', 'unknown') %}
+          <span class="badge warn"><span class="dot"></span>{{ e.stage }}</span>
+        {% else %}
+          <span class="badge bad"><span class="dot"></span>{{ e.stage }}</span>
+        {% endif %}
+      </td>
+      <td class="num">{{ e.sharpe | num }}</td>
+      <td class="wrap">{{ e.hypothesis | truncate(120) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">No candidates match these filters.</div>
+{% endif %}
