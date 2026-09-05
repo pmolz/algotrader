@@ -99,7 +99,15 @@ def backtest(
 def _infer_periods_per_year(index: pd.DatetimeIndex) -> int:
     if len(index) < 3:
         return 252
-    median_delta = np.median(np.diff(index.view("int64"))) / 1e9  # seconds
+    # Measure the bar spacing in seconds *unit-independently*. A DatetimeIndex
+    # can be backed by datetime64[ns], [us], [ms] or [s] — a Parquet round-trip
+    # commonly yields [us] — so reading the raw int64 and assuming nanoseconds
+    # silently scales the answer by 1000x per unit step. That inflates
+    # periods_per_year, and Sharpe with it by its square root.
+    deltas = pd.Series(index).diff().dt.total_seconds().dropna()
+    if deltas.empty:
+        return 252
+    median_delta = float(deltas.median())
     seconds_per_year = 365.25 * 24 * 3600
     if median_delta <= 0:
         return 252
