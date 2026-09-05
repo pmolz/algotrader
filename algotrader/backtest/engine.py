@@ -20,6 +20,7 @@ import pandas as pd
 
 from ..strategies.base import Strategy, coerce_positions
 from .metrics import compute_metrics
+from .pathsim import simulate
 
 
 @dataclass
@@ -62,17 +63,43 @@ def backtest(
     held = target.shift(1).fillna(0.0)
 
     close = df["close"]
-    asset_ret = close.pct_change().fillna(0.0)
-
-    # Turnover = change in position from one bar to the next -> transaction costs.
-    turnover = held.diff().abs().fillna(held.abs())
     cost_rate = fee_pct + slippage_pct
-    costs = turnover * cost_rate
+    risk_meta: dict = {}
 
-    strat_ret = held * asset_ret - costs
+    has_risk = (getattr(sig, "stop_loss_pct", None) is not None
+                or getattr(sig, "take_profit_pct", None) is not None)
+    if has_risk and not allow_short:
+        # A stop fires inside a bar, which close-to-close arithmetic cannot see.
+        # Walk the path instead — see pathsim for the fill rules.
+        path = simulate(
+            df, held,
+            stop_loss_pct=sig.stop_loss_pct,
+            take_profit_pct=sig.take_profit_pct,
+            fee_pct=fee_pct, slippage_pct=slippage_pct,
+        )
+        strat_ret = path.returns
+        held = path.positions
+        trades = len(path.trades)
+        risk_meta = {
+            "risk_managed": True,
+            "exit_counts": path.exit_counts,
+            # How often "stop wins ties" actually decided the outcome. If this is
+            # a large share of exits the result rests on an assumption, not on
+            # anything the data can confirm.
+            "ambiguous_bars": path.ambiguous_bars,
+            "avg_bars_held": (
+                float(np.mean([t["bars_held"] for t in path.trades])) if path.trades else 0.0
+            ),
+        }
+    else:
+        asset_ret = close.pct_change().fillna(0.0)
+        # Turnover = change in position from one bar to the next -> costs.
+        turnover = held.diff().abs().fillna(held.abs())
+        strat_ret = held * asset_ret - turnover * cost_rate
+        trades = int((held.diff().fillna(held).abs() > 1e-9).sum())
+        risk_meta = {"risk_managed": False}
+
     equity = initial_cash * (1.0 + strat_ret).cumprod()
-
-    trades = int((held.diff().fillna(held).abs() > 1e-9).sum())
 
     if periods_per_year is None:
         periods_per_year = _infer_periods_per_year(df.index)
@@ -92,6 +119,15 @@ def backtest(
             "allow_short": allow_short,
             "periods_per_year": periods_per_year,
             "n_bars": len(df),
+            # Cost drag is the whole game intraday: a few trades a day at 15m is
+            # ~1000 round trips a year, and each one pays the spread twice.
+            "cost_drag_annual": float(
+                trades * cost_rate * periods_per_year / max(len(df), 1)
+            ),
+            "trades_per_day": float(
+                trades / max((len(df) / (periods_per_year / 365.25)), 1e-9)
+            ),
+            **risk_meta,
         },
     )
 

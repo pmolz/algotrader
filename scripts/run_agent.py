@@ -43,6 +43,7 @@ def main():
 
     df = fetch(args.symbol, source=args.source, timeframe=args.timeframe,
                cache_dir=get(cfg, "data.cache_dir"),
+               bars=get(cfg, "data.default_bars"),
                exchange=get(cfg, "data.ccxt_exchange", "bitstamp"))
 
     llm = make_client(cfg, host=args.ollama_host, logger=print)

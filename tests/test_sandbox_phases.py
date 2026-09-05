@@ -98,7 +98,7 @@ def test_codegen_failure_earns_a_fix_retry(trending_ohlcv, tmp_path, monkeypatch
     r = loop.step()
 
     assert len(calls) == 2, "a codegen failure should trigger exactly one fix-retry"
-    assert "failed to run" in calls[1]
+    assert "Traceback" in calls[1] or "Error" in calls[1]
     assert r["strategy"] == "fixed"      # the retry's strategy is what got judged
 
 
@@ -136,7 +136,8 @@ def test_runtime_failures_earn_a_fix_retry(trending_ohlcv, monkeypatch, tmp_path
     result = loop.step()
 
     assert len(calls) == 2, "the runtime failure did not earn a retry"
-    assert "failed to run" in calls[1], "the fix prompt should carry the error"
+    assert "Traceback" in calls[1], "the fix prompt should carry the error"
+    assert "Exploder" in calls[1], "and the code it is meant to repair"
     assert result["strategy"] == "fixed"
 
 

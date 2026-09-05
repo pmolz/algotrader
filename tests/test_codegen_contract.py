@@ -80,3 +80,51 @@ def test_a_bare_import_of_an_unknown_module_is_refused():
 def test_denylist_still_screens_dangerous_source():
     with pytest.raises(ValueError):
         load_strategy_class(f"import os\n{BODY}")
+
+
+# -- hypothesis extraction ----------------------------------------------------
+# The hypothesis feeds lessons_context, so dropping one costs the loop its memory
+# of why an idea was tried. Models emit the label inconsistently.
+from algotrader.agent.codegen import parse_response  # noqa: E402
+
+CODE = 'class T(Strategy):\n    name = "t"\n'
+
+
+def test_labelled_hypothesis_is_extracted():
+    h, c = parse_response(f"HYPOTHESIS: liquidations overshoot\n```python\n{CODE}```")
+    assert h == "liquidations overshoot" and "class T" in c
+
+
+def test_a_multi_line_hypothesis_is_kept_whole():
+    """The prompt asks for a mechanism AND a falsification test — two lines."""
+    text = ("HYPOTHESIS: liquidations force selling that overshoots.\n"
+            "Falsified if reversion does not exceed costs.\n"
+            f"```python\n{CODE}```")
+    h, _ = parse_response(text)
+    assert "Falsified if" in h, "only the first line survived"
+
+
+def test_unlabelled_prose_before_the_code_is_used_as_the_hypothesis():
+    text = f"**Mean reversion after a volume spike.**\n\n```python\n{CODE}```"
+    h, _ = parse_response(text)
+    assert "Mean reversion after a volume spike" in h
+
+
+def test_markdown_headings_are_stripped_from_the_fallback():
+    h, _ = parse_response(f"## Volume Spike Reversion\nBuys the dip.\n```python\n{CODE}```")
+    assert h.startswith("Volume Spike Reversion")
+
+
+def test_a_bare_fence_without_a_language_tag_still_parses():
+    h, c = parse_response(f"HYPOTHESIS: x\n```\n{CODE}```")
+    assert "class T" in c
+
+
+def test_no_code_block_is_still_an_error():
+    with pytest.raises(ValueError):
+        parse_response("HYPOTHESIS: I forgot the code")
+
+
+def test_nothing_at_all_falls_back_to_a_placeholder():
+    h, _ = parse_response(f"```python\n{CODE}```")
+    assert h == "(no hypothesis provided)"

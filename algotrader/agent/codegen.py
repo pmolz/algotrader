@@ -20,8 +20,11 @@ import pandas as pd
 
 from ..strategies.base import Strategy, StrategyResult
 
-CODE_BLOCK_RE = re.compile(r"```python\s*(.*?)```", re.DOTALL)
-HYPOTHESIS_RE = re.compile(r"HYPOTHESIS:\s*(.*)", re.IGNORECASE)
+CODE_BLOCK_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.DOTALL)
+# Capture everything after the label up to the code fence: the prompt asks for a
+# mechanism *and* a falsification test, which is two sentences on two lines, and
+# a single-line capture silently kept only the first.
+HYPOTHESIS_RE = re.compile(r"HYPOTHESIS:\s*(.*?)(?=```|\Z)", re.IGNORECASE | re.DOTALL)
 
 # crude denylist to catch obviously dangerous generated code before exec
 FORBIDDEN = ["import os", "import sys", "subprocess", "open(", "__import__",
@@ -30,14 +33,28 @@ FORBIDDEN = ["import os", "import sys", "subprocess", "open(", "__import__",
 
 
 def parse_response(text: str) -> tuple[str, str]:
-    """Extract (hypothesis, code) from the LLM response."""
+    """Extract (hypothesis, code) from the LLM response.
+
+    The hypothesis is not decoration: it is what `lessons_context` feeds back
+    into every later proposal, so a dropped one costs the loop its memory of why
+    an idea was tried. Models emit the label inconsistently — roughly two thirds
+    of the time in practice — so fall back to whatever prose precedes the code
+    block before giving up.
+    """
     m = CODE_BLOCK_RE.search(text)
     if not m:
         raise ValueError("No ```python code block found in LLM response.")
     code = m.group(1).strip()
+
     hm = HYPOTHESIS_RE.search(text)
-    hypothesis = hm.group(1).strip() if hm else "(no hypothesis provided)"
-    return hypothesis, code
+    hypothesis = hm.group(1).strip() if hm else ""
+    if not hypothesis:
+        # Unlabelled prose before the fence is still the model explaining itself.
+        preamble = text[: m.start()].strip()
+        preamble = re.sub(r"^#+\s*", "", preamble, flags=re.MULTILINE).strip()
+        hypothesis = preamble
+    hypothesis = " ".join(hypothesis.split())
+    return (hypothesis or "(no hypothesis provided)"), code
 
 
 def _screen(code: str) -> None:

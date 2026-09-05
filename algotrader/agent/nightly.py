@@ -229,6 +229,7 @@ class NightlySession:
         for spec in self.specs:
             try:
                 df = fetch(spec.symbol, source=spec.source, timeframe=spec.timeframe,
+                           bars=get(self.cfg, "data.default_bars"),
                            cache_dir=cache_dir, refresh=True, exchange=exchange)
                 self.log(f"data {spec.symbol} [{spec.timeframe}] {len(df)} bars (fresh)")
             except Exception as e:  # noqa: BLE001

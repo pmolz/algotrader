@@ -22,9 +22,19 @@ import pandas as pd
 
 @dataclass
 class StrategyResult:
-    """A strategy's output: target positions plus optional debug/indicator data."""
+    """A strategy's output: target positions, an optional risk overlay, and
+    optional debug/indicator data.
+
+    `stop_loss_pct` and `take_profit_pct` are fractions of the entry price
+    (0.01 = 1%). Either may be a scalar, or a Series to size the level per bar
+    from something like ATR. When either is set the backtest stops being a
+    close-to-close calculation and simulates each bar's path against the levels;
+    see algotrader/backtest/engine.py for the fill rules it uses.
+    """
 
     positions: pd.Series               # index-aligned to input, values in [-1, 1]
+    stop_loss_pct: float | pd.Series | None = None
+    take_profit_pct: float | pd.Series | None = None
     indicators: dict[str, pd.Series] = field(default_factory=dict)
     meta: dict[str, Any] = field(default_factory=dict)
 

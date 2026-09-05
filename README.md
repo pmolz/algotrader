@@ -49,14 +49,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-# 1. pull and cache some data
-python scripts/fetch_data.py --symbol BTC/USD --source ccxt --timeframe 1d
+# 1. pull and cache some data (a year of 15m bars, paged from the exchange)
+python scripts/fetch_data.py --symbol BTC/USD --source ccxt --timeframe 15m
 
 # 2. run the built-in baseline strategies through the gauntlet
 python scripts/run_backtest.py --strategy sma_crossover --symbol BTC/USD
 
 # 3. run the agent loop
-python scripts/run_agent.py --symbol BTC/USD --iterations 5 --sandbox
+python scripts/run_agent.py --symbol BTC/USD --timeframe 15m --iterations 5 --sandbox
 
 # 4. hand it the night, read the report over coffee
 bash sandbox/build.sh
@@ -66,6 +66,55 @@ bash scripts/install_cron.sh                                   # dry run first
 
 > `data.ccxt_exchange` defaults to `bitstamp`, not Binance — Binance refuses
 > public OHLCV requests from some regions. Any ccxt venue works.
+
+## Intraday crypto, and why costs are the whole problem
+
+The default target is **BTC/USD and ETH/USD on 15-minute bars**, one year of
+history (35,040 bars, paged from the exchange 1000 at a time).
+
+At that timeframe transaction costs dominate everything else. A round trip pays
+fees plus slippage twice — about **0.30%** at the configured rates — so:
+
+| trades/day | round trips/yr | cost drag |
+|-----------:|---------------:|----------:|
+| 1 | 365 | ~110% of capital |
+| 3 | 1,095 | ~330% |
+| 10 | 3,650 | ~1,100% |
+
+A strategy must average more than 0.30% *per trade* before anything is left
+over. This is not a tuning detail, it is the constraint the whole search runs
+inside, so the gauntlet checks it **before** the expensive validation and
+rejects anything above `validation.max_trades_per_day`. The failure messages
+distinguish "traded too often to survive costs", "never traded at all", and
+"traded sensibly and lost money" — three different problems that need three
+different fixes, and all three end up in the agent's memory.
+
+### Stop loss and take profit
+
+Strategies may declare a risk overlay:
+
+```python
+return StrategyResult(
+    positions=entries.astype(float),
+    stop_loss_pct=atr_frac * 1.5,     # float, or a Series for volatility sizing
+    take_profit_pct=atr_frac * 3.0,
+)
+```
+
+When either is set the engine stops doing close-to-close arithmetic and walks
+each bar's path. The fill rules are chosen so a backtest cannot flatter itself:
+
+- **If a bar could have hit both your stop and your target, the stop is
+  assumed.** OHLC cannot say which came first, and guessing the target is how a
+  backtest invents an edge. `ambiguous_exit_frac` counts how often that
+  assumption was load-bearing, and a candidate leaning on it too heavily is
+  rejected as unmeasurable rather than accepted as profitable.
+- **A bar that gaps through a level fills at the open**, not at the level.
+- **No immediate re-entry** after a stop: the signal must go flat and fire
+  again, or the stop is just a fee generator.
+
+Shorting is off. Perp funding and borrow costs aren't modelled, and leaving
+them out would flatter every short strategy.
 
 ## Overnight loop + morning report
 

@@ -25,7 +25,12 @@ from ..validation.gauntlet import run_gauntlet
 from .codegen import load_strategy_class, parse_response
 from .llm import make_client
 from .memory import ExperimentDB
-from .prompts import FIX_TEMPLATE, PROPOSE_TEMPLATE, SYSTEM_PROMPT
+from .prompts import (
+    FIX_TEMPLATE,
+    PROPOSE_TEMPLATE,
+    SYSTEM_PROMPT,
+    WORKED_EXAMPLE,
+)
 from .sandbox import (
     SandboxError,
     SandboxLimits,
@@ -118,7 +123,7 @@ class AgentLoop:
         if self._llm_ready():
             user = PROPOSE_TEMPLATE.format(
                 symbol=self.symbol, timeframe=self.timeframe,
-                source=self.source, lessons=lessons,
+                source=self.source, lessons=lessons, example=WORKED_EXAMPLE,
             )
             text = self.llm.complete(SYSTEM_PROMPT, user)
             hypothesis, code = parse_response(text)
