@@ -25,12 +25,17 @@ ollama pull qwen2.5-coder:7b        # already the config default
 python scripts/run_nightly.py --hours 0.1 --max-iterations 2
 python scripts/morning_report.py
 
-# 4. see what would go in your crontab, then install it
-bash scripts/install_cron.sh
+# 4. schedule it
+bash scripts/install_cron.sh              # dry run: shows the crontab lines
 bash scripts/install_cron.sh --install
 ```
 
 Times are configurable: `NIGHTLY_CRON="0 23 * * *" bash scripts/install_cron.sh`.
+
+**No cron on this machine?** Arch/CachyOS ships without one. If
+`command -v crontab` is empty, skip `install_cron.sh` entirely and use the
+[systemd timer](#systemd-timer-preferred-and-the-only-option-without-cron)
+below — it is the better choice regardless.
 
 ## What one session does
 
@@ -118,37 +123,42 @@ python scripts/morning_report.py --run 12      # one specific session
 python scripts/morning_report.py --stdout      # print, write no file
 ```
 
-## If the machine sleeps at night
+## systemd timer (preferred, and the only option without cron)
 
-Cron does not fire while suspended, and a session interrupted by suspend shows
-up as an unfinished run. Either keep the box awake:
+Arch/CachyOS ships **no cron daemon by default** — if `command -v crontab` comes
+back empty, `install_cron.sh` has nothing to write to and a systemd user timer is
+your path. It is the better option anyway: `Persistent=true` runs a session that
+was missed because the machine was asleep, which cron cannot do.
 
-```bash
-sudo systemctl mask sleep.target suspend.target hibernate.target
-```
-
-...or use a systemd timer with `Persistent=true`, which runs a missed job on the
-next wake. `~/.config/systemd/user/algotrader-nightly.service`:
+`~/.config/systemd/user/algotrader-nightly.service`:
 
 ```ini
 [Unit]
-Description=algotrader overnight session
+Description=algotrader overnight research session
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=oneshot
 WorkingDirectory=%h/Projects/algotrader
 ExecStart=/bin/bash %h/Projects/algotrader/scripts/nightly_cron.sh
+# CRITICAL: a session runs for hours. Without this, systemd's 90s default start
+# timeout kills it almost immediately and the night is silently lost.
+TimeoutStartSec=infinity
+Nice=10
+IOSchedulingClass=idle
 ```
 
 `~/.config/systemd/user/algotrader-nightly.timer`:
 
 ```ini
 [Unit]
-Description=Run the algotrader overnight session
+Description=Run the algotrader overnight session at 22:00
 
 [Timer]
 OnCalendar=*-*-* 22:00:00
 Persistent=true
+RandomizedDelaySec=300
 
 [Install]
 WantedBy=timers.target
@@ -158,13 +168,50 @@ WantedBy=timers.target
 systemctl --user daemon-reload
 systemctl --user enable --now algotrader-nightly.timer
 systemctl --user list-timers algotrader-nightly.timer
-loginctl enable-linger "$USER"     # so it runs when you're not logged in
+sudo loginctl enable-linger "$USER"    # so it runs when you're not logged in
 ```
+
+Verify the service works under systemd's environment (which is more restricted
+than your shell — this is where a missing `docker` group or PATH shows up)
+without waiting for 22:00:
+
+```bash
+systemd-run --user --wait --collect --pipe --service-type=oneshot \
+  --working-directory="$HOME/Projects/algotrader" \
+  --property=TimeoutStartSec=infinity \
+  /bin/bash scripts/nightly_cron.sh --hours 0.02 --max-iterations 1
+```
+
+Logs afterwards: `journalctl --user -u algotrader-nightly.service -n 50`, plus
+the usual `experiments/logs/`.
+
+## If the machine sleeps at night
+
+Cron does not fire while suspended, and a session interrupted by suspend shows
+up as an unfinished run. The systemd timer above handles this with
+`Persistent=true`. If you are on cron instead, either keep the box awake:
+
+```bash
+sudo systemctl mask sleep.target suspend.target hibernate.target
+```
+
+...or switch to the systemd timer above, which picks up the missed session on
+the next wake instead.
 
 ## Troubleshooting
 
 **Nothing ran.** The report says so loudly. Check `experiments/logs/cron-*.log`
-first — if it is missing entirely, cron never fired (`systemctl status cronie`).
+first — if it is missing entirely, the schedule never fired. On cron:
+`systemctl status cronie`. On a timer:
+`systemctl --user list-timers algotrader-nightly.timer` and
+`journalctl --user -u algotrader-nightly.service`.
+
+**The session dies after ~90 seconds under systemd.** You are missing
+`TimeoutStartSec=infinity` in the service unit. That is systemd's default start
+timeout killing a long `Type=oneshot` job.
+
+**It runs when you're logged in but not overnight.** User services stop when
+your last session ends unless lingering is on: `sudo loginctl enable-linger $USER`.
 
 **"another session holds the lock".** Expected if last night overran. Confirm
 with `cat experiments/nightly.lock` and `ps -p <pid>`.
