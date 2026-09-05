@@ -168,7 +168,7 @@ WantedBy=timers.target
 systemctl --user daemon-reload
 systemctl --user enable --now algotrader-nightly.timer
 systemctl --user list-timers algotrader-nightly.timer
-sudo loginctl enable-linger "$USER"    # so it runs when you're not logged in
+loginctl enable-linger                 # so it runs when you're not logged in
 ```
 
 Verify the service works under systemd's environment (which is more restricted
@@ -211,7 +211,17 @@ first — if it is missing entirely, the schedule never fired. On cron:
 timeout killing a long `Type=oneshot` job.
 
 **It runs when you're logged in but not overnight.** User services stop when
-your last session ends unless lingering is on: `sudo loginctl enable-linger $USER`.
+your last session ends unless lingering is on. Enable it with **no argument and
+no sudo**:
+
+```bash
+loginctl enable-linger          # polkit action set-self-linger: allow_any=yes
+```
+
+Naming the user explicitly (`loginctl enable-linger $USER`) is a *different*
+polkit action — `set-user-linger`, which is `auth_admin_keep` — so it demands an
+administrator password and fails in a plain TTY with no polkit agent running.
+Check the result with `loginctl show-user $USER -p Linger`.
 
 **"another session holds the lock".** Expected if last night overran. Confirm
 with `cat experiments/nightly.lock` and `ps -p <pid>`.
