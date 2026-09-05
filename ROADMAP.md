@@ -10,8 +10,15 @@ Build trust from the bottom up. Do not skip Phase 0.
 - [x] Performance metrics (Sharpe, Sortino, max drawdown, CAGR, etc.)
 - [x] Validation gauntlet: walk-forward, OOS holdout, cost sensitivity, deflated Sharpe
 - [x] 2 hand-written baseline strategies
-- [ ] Automated lookahead-bias check on every strategy
+- [x] Automated lookahead-bias check on every strategy
 - [ ] Unit tests for the backtest engine on known inputs
+
+The lookahead check runs two probes per cut point: truncation (catches
+whole-sample statistics) and future-perturbation (catches `.shift(-k)`). The
+second exists because truncation alone detected a sparse `shift(-1)` cheat only
+4% of the time — it was measuring signal density, not peeking. See
+`tests/test_lookahead.py`; re-audit stored candidates with
+`scripts/recheck_lookahead.py`.
 
 ## Phase 1 — Manual agent
 - [x] Experiment DB (SQLite) recording every run
