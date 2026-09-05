@@ -17,10 +17,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, render_template, request
+from flask.json.provider import DefaultJSONProvider
 
 from ..config import REPO_ROOT, get, load_config
 from . import queries
-from .equity import EquityUnavailable, equity_curve
+from .equity import EquityUnavailable, cached_curve, equity_curve, json_safe
 
 # Presets for the date-range control. Order matters: shown as rows, in this order.
 RANGES = {
@@ -62,9 +63,24 @@ def _filters(args) -> dict:
     return f
 
 
+class StrictJSONProvider(DefaultJSONProvider):
+    """Emit spec-valid JSON only.
+
+    Flask's default provider inherits Python's `allow_nan=True`, which writes
+    bare `NaN` / `Infinity` tokens. Those are not JSON, and the browser's
+    JSON.parse rejects the entire document — so one infinite Calmar ratio breaks
+    a whole response. Non-finite floats become null, which every client can read.
+    """
+
+    def dumps(self, obj, **kwargs):
+        kwargs.setdefault("allow_nan", False)
+        return super().dumps(json_safe(obj), **kwargs)
+
+
 def create_app(cfg: dict | None = None) -> Flask:
     cfg = cfg or load_config()
     app = Flask(__name__)
+    app.json = StrictJSONProvider(app)
     app.config["ALGOTRADER_CFG"] = cfg
 
     def db():
@@ -128,6 +144,9 @@ def create_app(cfg: dict | None = None) -> Flask:
                 folds=queries.fold_sharpes(exp),
                 stress=queries.cost_stress(exp),
                 min_sharpe=get(cfg, "validation.min_sharpe", 1.0),
+                # Render a known curve immediately. Cache-only, so loading a URL
+                # can never launch a container — that needs the button.
+                preloaded=cached_curve(exp, cfg),
             )
         finally:
             conn.close()

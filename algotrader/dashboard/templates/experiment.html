@@ -119,7 +119,8 @@
   const folds = {{ folds | tojson_safe | safe }};
   const stress = {{ stress | tojson_safe | safe }};
   const minSharpe = {{ min_sharpe }};
-  let equity = null;
+  // Already computed once? Render it straight away — no fetch, no flash.
+  let equity = {{ (preloaded | tojson_safe | safe) if preloaded else 'null' }};
 
   function drawStatic() {
     columns(document.getElementById('folds-chart'),
@@ -149,12 +150,39 @@
          markerLabel: 'holdout begins', height: 280 });
   }
 
+  function renderMeta(data) {
+    const meta = document.getElementById('equity-meta');
+    meta.textContent = '';
+    const dd = data.metrics.max_drawdown;
+    const tiles = [
+      ['Final equity', fmt(data.equity[data.equity.length - 1], 0)],
+      ['Buy & hold', fmt(data.benchmark[data.benchmark.length - 1], 0)],
+      ['Sharpe', fmt(data.metrics.sharpe, 2)],
+      ['Max drawdown', dd == null ? '—' : (dd * 100).toFixed(1) + '%'],
+      ['Trades', String(data.trades)],
+    ];
+    for (const [label, value] of tiles) {
+      const t = document.createElement('div');
+      t.className = 'tile';
+      const l = document.createElement('div'); l.className = 'label'; l.textContent = label;
+      const v = document.createElement('div'); v.className = 'value'; v.textContent = value;
+      t.appendChild(l); t.appendChild(v);
+      meta.appendChild(t);
+    }
+    meta.style.display = '';
+  }
+
   drawStatic();
-  window.addEventListener('theme-change', () => { drawStatic(); drawEquity(); });
+  const redraw = () => { drawStatic(); drawEquity(); };
+  window.addEventListener('theme-change', redraw);
+  let rt; window.addEventListener('resize', () => {
+    clearTimeout(rt); rt = setTimeout(redraw, 150);   // re-measure the container
+  });
 
   const btn = document.getElementById('equity-btn');
   const status = document.getElementById('equity-status');
-  btn?.addEventListener('click', async () => {
+
+  async function plot() {
     btn.disabled = true;
     status.textContent = 'Running in the sandbox…';
     try {
@@ -170,29 +198,26 @@
         ? 'From cache.'
         : `Ran in ${data.elapsed_s}s inside the jail.`;
 
-      const meta = document.getElementById('equity-meta');
-      meta.textContent = '';
-      const tiles = [
-        ['Final equity', fmt(data.equity[data.equity.length - 1], 0)],
-        ['Buy & hold', fmt(data.benchmark[data.benchmark.length - 1], 0)],
-        ['Sharpe', fmt(data.metrics.sharpe, 2)],
-        ['Max drawdown', (data.metrics.max_drawdown * 100).toFixed(1) + '%'],
-        ['Trades', String(data.trades)],
-      ];
-      for (const [label, value] of tiles) {
-        const t = document.createElement('div');
-        t.className = 'tile';
-        const l = document.createElement('div'); l.className = 'label'; l.textContent = label;
-        const v = document.createElement('div'); v.className = 'value'; v.textContent = value;
-        t.appendChild(l); t.appendChild(v);
-        meta.appendChild(t);
-      }
-      meta.style.display = '';
+      renderMeta(data);
       drawEquity();
     } catch (e) {
       status.textContent = 'Request failed: ' + e.message;
       btn.disabled = false;
     }
-  });
+  }
+
+  btn?.addEventListener('click', plot);
+
+  if (equity) {
+    // server handed us a cached curve
+    renderMeta(equity);
+    drawEquity();
+    status.textContent = 'From cache.';
+    btn.textContent = 'Recompute';
+  } else if (btn && !btn.disabled
+             && new URLSearchParams(location.search).get('plot') === '1') {
+    // ?plot=1 deep-links straight to the curve
+    plot();
+  }
 </script>
 {% endblock %}

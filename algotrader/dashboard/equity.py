@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from ..agent.sandbox import (
@@ -32,10 +33,35 @@ class EquityUnavailable(RuntimeError):
     """Raised with a human-readable reason the curve can't be produced."""
 
 
+# Bump when the payload shape or the numbers it carries change, so a cached
+# result computed by older code is never served. Without this, a fix to the
+# backtest engine leaves stale (wrong) curves on disk indefinitely.
+CACHE_VERSION = 2
+
+
+def json_safe(obj):
+    """Replace non-finite floats with None, recursively.
+
+    Python's json module happily writes `NaN` / `Infinity`, which are **not
+    valid JSON** — the browser's JSON.parse rejects the whole document. And
+    these values occur naturally here: Calmar is inf when max drawdown is zero,
+    a flat equity curve gives a 0/0 Sharpe. So this is not defensive padding;
+    without it a legitimate strategy breaks the endpoint.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [json_safe(v) for v in obj]
+    return obj
+
+
 def _cache_key(code: str, symbol: str, source: str, timeframe: str, cfg: dict) -> str:
     bt = cfg.get("backtest", {})
     blob = json.dumps(
         {
+            "v": CACHE_VERSION,
             "code": code,
             "symbol": symbol,
             "source": source,
@@ -49,6 +75,29 @@ def _cache_key(code: str, symbol: str, source: str, timeframe: str, cfg: dict) -
         sort_keys=True,
     )
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def cached_curve(exp: dict, cfg: dict) -> dict | None:
+    """Return an already-computed curve, or None. Never launches a container.
+
+    Lets the page render a known curve server-side instead of making the browser
+    fetch it, while guaranteeing that merely loading a URL can never start a
+    container.
+    """
+    code = exp.get("code")
+    if not code or not exp.get("symbol"):
+        return None
+    cache_dir = Path(get(cfg, "dashboard.cache_dir", "experiments/equity_cache"))
+    key = _cache_key(code, exp["symbol"], exp.get("source"), exp.get("timeframe"), cfg)
+    f = cache_dir / f"{key}.json"
+    if not f.exists():
+        return None
+    try:
+        out = json.loads(f.read_text())
+    except (OSError, ValueError):
+        return None
+    out["cached"] = True
+    return out
 
 
 def equity_curve(exp: dict, cfg: dict, *, use_cache: bool = True) -> dict:
@@ -122,8 +171,10 @@ def equity_curve(exp: dict, cfg: dict, *, use_cache: bool = True) -> dict:
             + (out.get("error") or "").strip().splitlines()[-1][:200]
         )
 
-    out = _downsample(out)
-    cache_file.write_text(json.dumps(out))
+    out = json_safe(_downsample(out))
+    # allow_nan=False turns "we wrote invalid JSON" into a loud failure here
+    # rather than a JSON.parse error in the browser.
+    cache_file.write_text(json.dumps(out, allow_nan=False))
     out["cached"] = False
     return out
 

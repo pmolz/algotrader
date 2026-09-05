@@ -8,6 +8,7 @@ Two things matter here beyond "the page renders":
      dashboard is the one that is wrong.
 """
 
+import json
 import sqlite3
 import time
 
@@ -205,6 +206,48 @@ def test_report_path_traversal_is_blocked(client):
 
 
 # -- equity endpoint ------------------------------------------------------------------
+def test_api_emits_spec_valid_json(seeded, monkeypatch):
+    """NaN / Infinity are valid Python json but NOT valid JSON.
+
+    The browser's JSON.parse rejects the whole document, so one infinite Calmar
+    ratio breaks the entire response. Python's own json.loads accepts these
+    tokens, which is exactly why this needs `parse_constant` to fail — a plain
+    `get_json()` would have happily parsed the broken payload.
+    """
+    from algotrader.dashboard import equity as equity_mod
+
+    def boom(_):
+        raise AssertionError("payload contained a non-finite JSON constant")
+
+    def fake_run(df, code, cfg, n_trials=1, limits=None, mode="gauntlet"):
+        return {"ok": True, "dates": ["2020-01-01T00:00:00"], "equity": [1.0],
+                "benchmark": [float("nan")], "positions": [0.0], "trades": 0,
+                # calmar is legitimately infinite when max drawdown is zero
+                "metrics": {"sharpe": 1.0, "calmar": float("inf")},
+                "benchmark_metrics": {"cagr": float("inf")}, "holdout_start": None}
+
+    monkeypatch.setattr(equity_mod, "run_gauntlet_sandboxed", fake_run)
+    monkeypatch.setattr(equity_mod, "docker_available", lambda: True)
+    monkeypatch.setattr(equity_mod, "image_exists", lambda img: True)
+    monkeypatch.setattr(equity_mod, "load_cached",
+                        lambda *a, **k: __import__("pandas").DataFrame({"close": [1.0, 2.0]}))
+
+    r = create_app(seeded).test_client().get("/api/equity/1")
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "NaN" not in body and "Infinity" not in body
+    parsed = json.loads(body, parse_constant=boom)      # strict: rejects NaN/Infinity
+    assert parsed["metrics"]["calmar"] is None
+    assert parsed["benchmark"][0] is None
+
+
+def test_json_safe_replaces_non_finite_floats():
+    from algotrader.dashboard.equity import json_safe
+
+    out = json_safe({"a": float("inf"), "b": [float("nan"), 1.5], "c": {"d": -float("inf")}})
+    assert out == {"a": None, "b": [None, 1.5], "c": {"d": None}}
+
+
 def test_equity_refuses_when_no_code_was_stored(cfg):
     db = ExperimentDB(cfg["experiments"]["db_path"])
     db.record(symbol="BTC/USD", source="ccxt", timeframe="1d", strategy_name="(llm)",

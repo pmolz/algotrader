@@ -27,6 +27,13 @@ function el(tag, attrs = {}, parent = null) {
   return n;
 }
 
+/* Render at the container's real pixel width. A fixed viewBox width would be
+ * letterboxed by preserveAspectRatio — the chart centres itself and leaves the
+ * rest of the card empty. Pages re-draw on resize. */
+function width(host, min = 320) {
+  return Math.max(min, Math.floor(host.clientWidth || min));
+}
+
 function fmt(v, nd = 2) {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
   const a = Math.abs(v);
@@ -162,9 +169,10 @@ export function barsH(host, data, opts = {}) {
 
   const rowH = 30, barH = Math.min(24, 18), padL = 132, padR = 56, padT = 4;
   const h = data.length * rowH + padT;
-  const svg = el('svg', { viewBox: `0 0 700 ${h}`, height: h, role: 'img' }, host);
+  const W = width(host);
+  const svg = el('svg', { viewBox: `0 0 ${W} ${h}`, height: h, role: 'img' }, host);
   const max = Math.max(...data.map(d => d[valueKey])) || 1;
-  const w = 700 - padL - padR;
+  const w = W - padL - padR;
   const tt = tooltipFor(host);
 
   data.forEach((d, i) => {
@@ -191,7 +199,7 @@ export function barsH(host, data, opts = {}) {
     val.textContent = fmt(d[valueKey], 0) + unit + (d.share !== undefined ? `  (${Math.round(d.share * 100)}%)` : '');
 
     // hit target spans the whole row and clears 24px
-    const hit = el('rect', { x: 0, y, width: 700, height: rowH, class: 'hit' }, svg);
+    const hit = el('rect', { x: 0, y, width: W, height: rowH, class: 'hit' }, svg);
     const enter = (ev) => {
       path.classList.add('hot');
       const r = host.getBoundingClientRect();
@@ -218,7 +226,7 @@ export function stacked(host, data, series, opts = {}) {
   if (!data.length) { host.innerHTML = '<div class="empty">No activity in this range.</div>'; return; }
   legend(host, series.map(s => ({ label: s.label, color: css(s.color) })));
 
-  const W = 700, H = 220, padL = 34, padR = 8, padT = 10, padB = 30;
+  const W = width(host), H = 220, padL = 34, padR = 8, padT = 10, padB = 30;
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, height: H, role: 'img' }, host);
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const totals = data.map(d => series.reduce((a, s) => a + (d[s.key] || 0), 0));
@@ -285,7 +293,7 @@ export function columns(host, data, opts = {}) {
   // A bar running to the bottom of the plot puts its value label where the
   // category labels live. Reserve a band for it instead of letting them collide.
   const hasNeg = vals.some(v => v < 0);
-  const W = 700, padL = 42, padR = 12, padT = 16;
+  const W = width(host), padL = 42, padR = 12, padT = 16;
   const padB = hasNeg ? 44 : 28;
   const H = hasNeg ? 216 : 200;
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, height: H, role: 'img' }, host);
@@ -371,10 +379,12 @@ export function lines(host, labels, seriesList, opts = {}) {
     legend(host, seriesList.map(s => ({ label: s.label, color: css(s.color) })), 'stroke');
   }
 
-  const W = 700, H = opts.height || 240, padL = 52, padR = 62, padT = 12, padB = 28;
+  const W = width(host), H = opts.height || 240, padL = 52, padR = 62, padT = 12, padB = 28;
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, height: H, role: 'img' }, host);
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const all = seriesList.flatMap(s => s.values).filter(v => v !== null && !Number.isNaN(v));
+  const all = seriesList.flatMap(s => s.values)
+    .filter(v => v !== null && v !== undefined && Number.isFinite(v));
+  if (!all.length) { host.innerHTML = '<div class="empty">No finite values to plot.</div>'; return; }
   let lo = Math.min(...all), hi = Math.max(...all);
   if (opts.includeZero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
   const ticks = niceTicks(lo, hi, 4);
@@ -404,14 +414,29 @@ export function lines(host, labels, seriesList, opts = {}) {
 
   for (const s of seriesList) {
     const color = css(s.color);
-    const pts = s.values.map((v, i) => `${xOf(i)},${yOf(v)}`).join(' ');
-    el('polyline', {
-      points: pts, fill: 'none', stroke: color,
-      'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
-    }, svg);
+    // Non-finite values arrive as null (the API refuses to emit NaN/Infinity,
+    // which are not valid JSON). Break the line at a gap rather than drawing a
+    // segment through a value that does not exist.
+    let run = [];
+    const flush = () => {
+      if (run.length > 1) {
+        el('polyline', {
+          points: run.join(' '), fill: 'none', stroke: color,
+          'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+        }, svg);
+      }
+      run = [];
+    };
+    s.values.forEach((v, i) => {
+      if (v === null || v === undefined || Number.isNaN(v)) flush();
+      else run.push(`${xOf(i)},${yOf(v)}`);
+    });
+    flush();
 
-    // end marker: >= 8px with a 2px surface ring so overlaps stay legible
-    const li = s.values.length - 1;
+    // end marker on the last real value: >= 8px with a 2px surface ring
+    let li = s.values.length - 1;
+    while (li >= 0 && (s.values[li] === null || Number.isNaN(s.values[li]))) li--;
+    if (li < 0) continue;
     el('circle', {
       cx: xOf(li), cy: yOf(s.values[li]), r: 4,
       fill: color, stroke: css('--surface-1'), 'stroke-width': 2,
@@ -419,7 +444,7 @@ export function lines(host, labels, seriesList, opts = {}) {
     const lbl = el('text', {
       x: xOf(li) + 9, y: yOf(s.values[li]) + 4, class: 'axis-text',
     }, svg);
-    lbl.textContent = fmt(s.values[li], opts.yDecimals ?? 0);   // direct-label the endpoint only
+    lbl.textContent = fmt(s.values[li], opts.yDecimals ?? 0);   // endpoint only
   }
 
   // x labels: first, middle, last — never one per point

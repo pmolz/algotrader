@@ -140,5 +140,8 @@
   draw();
   // re-render on theme change so marks pick up the other mode's steps
   window.addEventListener('theme-change', draw);
+  let rt; window.addEventListener('resize', () => {
+    clearTimeout(rt); rt = setTimeout(draw, 150);   // re-measure the container
+  });
 </script>
 {% endblock %}
