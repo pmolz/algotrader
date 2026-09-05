@@ -12,6 +12,7 @@ algotrader/live/safety.py. Do not point this at an unattended machine with secre
 from __future__ import annotations
 
 import re
+import types
 from typing import Type
 
 import numpy as np
@@ -46,16 +47,29 @@ def _screen(code: str) -> None:
             raise ValueError(f"Refusing to exec generated code containing {bad!r}")
 
 
-# generated code may only import from this whitelist (models often add imports
-# despite instructions). Everything else raises ImportError.
-_ALLOWED_IMPORTS = {"pandas", "numpy", "math", "pandas as pd", "numpy as np"}
+# Generated code may only import from this whitelist (models add imports despite
+# instructions). Everything else raises ImportError.
+_ALLOWED_ROOTS = {"pandas", "numpy", "math"}
+
+# Names the framework injects into the namespace. Models habitually import them
+# anyway — `from strategy import Strategy` and friends were 31 of 41 codegen
+# failures in the experiment log, a quarter of all iterations thrown away over a
+# redundant import line. The names being asked for are exactly the objects
+# already in scope, so satisfy the request instead of rejecting the candidate.
+_FRAMEWORK_EXPORTS = {"Strategy": Strategy, "StrategyResult": StrategyResult}
 
 
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     root = name.split(".")[0]
-    if root not in {"pandas", "numpy", "math"}:
-        raise ImportError(f"Import of {name!r} not allowed in generated strategy.")
-    return __import__(name, globals, locals, fromlist, level)
+    if root in _ALLOWED_ROOTS:
+        return __import__(name, globals, locals, fromlist, level)
+    # `from <anything> import Strategy [, StrategyResult]` -> hand back the real
+    # classes. Nothing is actually imported and no other name resolves this way,
+    # so the sandbox surface is unchanged: a module that isn't whitelisted still
+    # cannot be reached, it just can't be used to smuggle a name in either.
+    if fromlist and set(fromlist) <= set(_FRAMEWORK_EXPORTS):
+        return types.SimpleNamespace(**_FRAMEWORK_EXPORTS)
+    raise ImportError(f"Import of {name!r} not allowed in generated strategy.")
 
 
 def load_strategy_class(code: str) -> Type[Strategy]:

@@ -166,9 +166,19 @@ class GeneratedSma(Strategy):
         # honest multiple-testing count = every experiment ever run on this symbol
         n_trials = max(1, self.db.total_trials(self.symbol) + 1)
 
-        # Evaluate, with one LLM-assisted fix retry on a code/parse error.
+        # Evaluate, with LLM-assisted fix retries.
+        #
+        # Runtime failures used to get zero retries — the gate only fired on
+        # FAIL codegen — even though they were 21% of all experiments and are
+        # exactly the kind of thing a model fixes when shown the traceback
+        # (wrong dtype, a column that doesn't exist, a bad quantile argument).
+        # FIX_TEMPLATE was already written for both cases.
         rep = self._evaluate(code, n_trials)
-        if not rep["ok"] and self._llm_ready() and rep["reasons"] == ["FAIL codegen"]:
+        max_attempts = int(get(self.cfg, "agent.max_fix_attempts", 2))
+        attempts = 0
+        while (not rep["ok"] and self._llm_ready() and attempts < max_attempts
+               and rep["reasons"] in (["FAIL codegen"], ["FAIL strategy runtime"])):
+            attempts += 1
             try:
                 text = self.llm.complete(
                     SYSTEM_PROMPT, FIX_TEMPLATE.format(error=rep["error"], code=code)
@@ -176,7 +186,7 @@ class GeneratedSma(Strategy):
                 hypothesis, code = parse_response(text)
                 rep = self._evaluate(code, n_trials)
             except Exception:  # noqa: BLE001
-                pass
+                break
 
         name = rep.get("strategy_name") or f"({gen_src})"
         params = rep.get("params") or {}

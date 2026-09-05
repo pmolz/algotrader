@@ -65,6 +65,9 @@ agent:
   probe_timeout_s: 3
 
   max_iterations: 10
+  # LLM-assisted repair attempts per candidate, for codegen *and* runtime
+  # failures. 0 disables retrying.
+  max_fix_attempts: 2
   # Number of past experiments (worst + best) fed back as "lessons learned".
   memory_context_n: 8
   # Run untrusted generated code inside a Docker jail (Phase 2). Strongly

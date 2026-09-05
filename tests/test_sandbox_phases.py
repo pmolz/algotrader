@@ -101,3 +101,66 @@ def test_codegen_failure_earns_a_fix_retry(trending_ohlcv, tmp_path, monkeypatch
     assert "failed to run" in calls[1]
     assert r["strategy"] == "fixed"      # the retry's strategy is what got judged
 
+
+# -- retry policy -------------------------------------------------------------
+def test_runtime_failures_earn_a_fix_retry(trending_ohlcv, monkeypatch, tmp_path):
+    """Runtime crashes used to get zero repair attempts despite being 21% of all
+    experiments, because the gate matched only ["FAIL codegen"]."""
+    from algotrader.agent.loop import AgentLoop
+    from algotrader.agent.memory import ExperimentDB
+    from algotrader.config import load_config
+
+    cfg = load_config()
+    cfg["agent"]["use_sandbox"] = False
+    cfg["agent"]["max_fix_attempts"] = 2
+    cfg["experiments"]["db_path"] = str(tmp_path / "e.db")
+    cfg["experiments"]["generated_code_dir"] = str(tmp_path / "gen")
+
+    calls = []
+
+    class FakeLLM:
+        def describe(self): return "fake"
+        def available(self): return True
+        def complete(self, system, user, **kw):
+            calls.append(user)
+            if len(calls) == 1:                      # the proposal: crashes
+                return ("HYPOTHESIS: broken\n```python\n" + CRASHES_AT_RUNTIME + "```")
+            return ('HYPOTHESIS: fixed\n```python\n'
+                    'class Fixed(Strategy):\n'
+                    '    name = "fixed"\n'
+                    '    def generate_signals(self, df):\n'
+                    '        return StrategyResult(positions=df["close"] * 0)\n```')
+
+    loop = AgentLoop(trending_ohlcv, cfg, llm=FakeLLM(), symbol="X", source="s",
+                     timeframe="1d", db=ExperimentDB(cfg["experiments"]["db_path"]))
+    result = loop.step()
+
+    assert len(calls) == 2, "the runtime failure did not earn a retry"
+    assert "failed to run" in calls[1], "the fix prompt should carry the error"
+    assert result["strategy"] == "fixed"
+
+
+def test_retries_are_capped_by_config(trending_ohlcv, tmp_path):
+    from algotrader.agent.loop import AgentLoop
+    from algotrader.agent.memory import ExperimentDB
+    from algotrader.config import load_config
+
+    cfg = load_config()
+    cfg["agent"]["use_sandbox"] = False
+    cfg["agent"]["max_fix_attempts"] = 3
+    cfg["experiments"]["db_path"] = str(tmp_path / "e.db")
+    cfg["experiments"]["generated_code_dir"] = str(tmp_path / "gen")
+
+    calls = []
+
+    class AlwaysBroken:
+        def describe(self): return "fake"
+        def available(self): return True
+        def complete(self, system, user, **kw):
+            calls.append(user)
+            return "HYPOTHESIS: nope\n```python\n" + CRASHES_AT_RUNTIME + "```"
+
+    loop = AgentLoop(trending_ohlcv, cfg, llm=AlwaysBroken(), symbol="X", source="s",
+                     timeframe="1d", db=ExperimentDB(cfg["experiments"]["db_path"]))
+    loop.step()
+    assert len(calls) == 1 + 3, f"expected 1 proposal + 3 retries, got {len(calls)}"

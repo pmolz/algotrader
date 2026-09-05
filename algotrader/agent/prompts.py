@@ -16,8 +16,11 @@ not to force a positive result. Overfitting is failure.
 THE STRATEGY CONTRACT (follow exactly):
 - Write ONE class that subclasses `Strategy` (already imported).
 - Implement `generate_signals(self, df) -> StrategyResult`.
-- `df` is an OHLCV pandas DataFrame with columns: open, high, low, close, volume,
-  indexed by UTC timestamp.
+- `df` is a pandas DataFrame indexed by UTC timestamp with EXACTLY these five
+  columns: open, high, low, close, volume. Nothing else exists. There is no
+  fundamentals, options, sentiment, or derivatives data — `open_interest`,
+  `funding_rate`, `eps`, `iv` and the like will raise KeyError and waste the
+  candidate. Build every feature from those five columns.
 - Return `StrategyResult(positions=<pd.Series>)` where positions are target
   exposure in [-1, 1] aligned to df.index (1=fully long, 0=flat, -1=short).
 - Set a unique class attribute `name = "<snake_case_name>"`.
@@ -30,7 +33,9 @@ CRITICAL LOOKAHEAD RULE:
   NEXT bar, so using close[t] is fine.
 
 AVAILABLE IMPORTS in the execution namespace: pandas as pd, numpy as np, and the
-classes `Strategy` and `StrategyResult`. Do not import anything else.
+classes `Strategy` and `StrategyResult` — all four are ALREADY IN SCOPE, so write
+no import lines at all. Only pandas, numpy and math can be imported; there is no
+`ta`, `talib`, `scipy` or `sklearn`.
 
 OUTPUT FORMAT: return ONLY a fenced ```python code block with the class. No prose.
 """
