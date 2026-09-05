@@ -79,6 +79,10 @@ dashboard:
   # Equity curves are re-run in the sandbox and cached by (code, data, costs).
   cache_dir: experiments/equity_cache
   equity_timeout_s: 60
+  # Let the dashboard start/stop agent sessions and toggle the nightly schedule.
+  # These are the only endpoints with side effects. Set false to make the whole
+  # app strictly read-only (recommended if you ever bind it off loopback).
+  allow_control: true
 
 sandbox:
   image: algotrader-sandbox:latest

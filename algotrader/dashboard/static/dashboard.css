@@ -137,7 +137,8 @@ main { padding: 24px; max-width: 1240px; margin: 0 auto; }
   font-size: 13px; font-weight: 600; margin: 0 0 2px;
   color: var(--text-primary);
 }
-.card > .sub { font-size: 12px; color: var(--text-muted); margin: 0 0 14px; }
+/* descendant, not child: sub-text also appears nested inside control blocks */
+.card .sub { font-size: 12px; color: var(--text-muted); margin: 0 0 14px; }
 
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
@@ -252,3 +253,27 @@ pre.code {
 .btn.secondary { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); }
 
 .empty { color: var(--text-muted); font-size: 13px; padding: 22px 0; text-align: center; }
+
+/* -- session control -------------------------------------------------------- */
+.control-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.control-row label { color: var(--text-muted); font-size: 12px; }
+.control-row select {
+  font: inherit; font-size: 13px; padding: 5px 9px;
+  background: var(--page); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 7px; cursor: pointer;
+}
+
+/* Meter: the unfilled track is a lighter step of the fill's own ramp, so the
+   state reads across the whole bar rather than only where it is filled. */
+.meter {
+  margin-top: 12px; height: 6px; border-radius: 3px; overflow: hidden;
+  background: color-mix(in srgb, var(--series-1) 18%, transparent);
+}
+.meter-fill {
+  height: 100%; background: var(--series-1); border-radius: 3px;
+  transition: width .4s ease;
+}
+
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.switch input { width: 15px; height: 15px; accent-color: var(--series-1); cursor: pointer; }
+.switch span { color: var(--text-secondary); font-size: 13px; }

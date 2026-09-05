@@ -97,10 +97,17 @@ activity, the full history, and each candidate's evidence — hypothesis, every
 gauntlet check, walk-forward fold Sharpes, cost stress, the generated code, and
 an on-demand equity curve.
 
+The Overview page also **starts and stops sessions**: pick a duration and an
+optional candidate limit, watch live progress, and stop gracefully (the agent
+finishes its current candidate, reflects, and closes the run cleanly). Sessions
+run as a transient systemd unit, so they survive the dashboard restarting.
+
 It opens the DB **read-only** and cannot write to the log the agent is appending
 to. Plotting an equity curve necessarily *runs* strategy code, so that happens
 inside the same Docker jail the nightly loop uses, and the result is cached.
-Loopback-only, no auth — see **[docs/DASHBOARD.md](docs/DASHBOARD.md)**.
+Loopback-only with CSRF and DNS-rebinding guards on the mutating endpoints; set
+`dashboard.allow_control: false` to make it strictly read-only. See
+**[docs/DASHBOARD.md](docs/DASHBOARD.md)**.
 
 ## Using a local model (Ollama / Qwen) — free & private
 

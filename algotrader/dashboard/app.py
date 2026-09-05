@@ -1,11 +1,20 @@
 """Local dashboard for browsing the experiment DB.
 
-Read-only by design. The single exception is the equity-curve endpoint, which
-re-runs a strategy inside the Docker jail — see `equity.py`. Nothing here can
-promote a candidate, edit the DB, or place an order.
+The DB is opened read-only, so the dashboard can never write the log the agent
+is appending to. Three endpoints do have side effects, and they are the whole
+of the app's blast radius:
 
-Binds to 127.0.0.1 by default. There is no authentication, because there is no
-network exposure; if you ever change the host, add auth first.
+  * `/api/equity/<id>`      re-runs one strategy inside the Docker jail
+  * `/api/session/start`    launches a session as a transient systemd unit
+  * `/api/session/stop`     SIGTERMs it (a graceful stop, not a kill)
+  * `/api/session/schedule` enables/disables the nightly timer
+
+Nothing here can promote a candidate, edit an experiment, or place an order.
+The mutating endpoints are POST-only and wear `@local_only` — see `guard.py`
+for why "it's just localhost" is not a defence on its own.
+
+Binds to 127.0.0.1 by default. There is no authentication; if you ever change
+the host, add auth first, and consider `dashboard.allow_control: false`.
 """
 
 from __future__ import annotations
@@ -20,8 +29,9 @@ from flask import Flask, abort, jsonify, render_template, request
 from flask.json.provider import DefaultJSONProvider
 
 from ..config import REPO_ROOT, get, load_config
-from . import queries
+from . import control, queries
 from .equity import EquityUnavailable, cached_curve, equity_curve, json_safe
+from .guard import local_only
 
 # Presets for the date-range control. Order matters: shown as rows, in this order.
 RANGES = {
@@ -97,6 +107,7 @@ def create_app(cfg: dict | None = None) -> Flask:
                 "ranges": RANGES,
                 "cur": _filters(request.args),
                 "qs": request.query_string.decode(),
+                "control_enabled": bool(get(cfg, "dashboard.allow_control", True)),
             }
         finally:
             conn.close()
@@ -198,6 +209,54 @@ def create_app(cfg: dict | None = None) -> Flask:
             return jsonify({"error": str(e)}), 409
         out["elapsed_s"] = round(time.time() - t0, 1)
         return jsonify(out)
+
+    # -- session control (the only endpoints with side effects) --------------------
+    def _control_enabled():
+        return bool(get(cfg, "dashboard.allow_control", True))
+
+    @app.route("/api/session/status")
+    def api_session_status():
+        conn = db()
+        try:
+            s = control.status(conn, cfg)
+        finally:
+            conn.close()
+        s["enabled"] = _control_enabled()
+        s["next_run"] = control.next_run()
+        return jsonify(s)
+
+    @app.route("/api/session/start", methods=["POST"])
+    @local_only
+    def api_session_start():
+        if not _control_enabled():
+            return jsonify({"error": "Session control is disabled in config."}), 403
+        payload = request.get_json(silent=True) or {}
+        try:
+            budget = control.Budget.parse(payload.get("hours"), payload.get("iterations"))
+            return jsonify(control.start(cfg, budget))
+        except control.ControlError as e:
+            return jsonify({"error": str(e)}), 409
+
+    @app.route("/api/session/stop", methods=["POST"])
+    @local_only
+    def api_session_stop():
+        if not _control_enabled():
+            return jsonify({"error": "Session control is disabled in config."}), 403
+        try:
+            return jsonify(control.stop())
+        except control.ControlError as e:
+            return jsonify({"error": str(e)}), 409
+
+    @app.route("/api/session/schedule", methods=["POST"])
+    @local_only
+    def api_session_schedule():
+        if not _control_enabled():
+            return jsonify({"error": "Session control is disabled in config."}), 403
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(control.set_timer(bool(payload.get("enabled"))))
+        except control.ControlError as e:
+            return jsonify({"error": str(e)}), 409
 
     @app.route("/api/stats")
     def api_stats():

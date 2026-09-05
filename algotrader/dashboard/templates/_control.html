@@ -1,0 +1,56 @@
+{# Session control. The only part of the dashboard that does anything.
+   Rendered empty and filled by JS from /api/session/status, so it reflects
+   reality even if a session was started from a terminal. #}
+<div class="card control" id="control-card" hidden>
+  <h2>Agent session</h2>
+  <p class="sub" id="control-sub">Checking…</p>
+
+  <div id="control-idle" hidden>
+    <div class="control-row">
+      <label for="ctl-hours">Run for</label>
+      <select id="ctl-hours">
+        <option value="0.25">15 minutes</option>
+        <option value="1">1 hour</option>
+        <option value="2">2 hours</option>
+        <option value="4">4 hours</option>
+        <option value="8" selected>8 hours (overnight)</option>
+        <option value="12">12 hours</option>
+      </select>
+
+      <label for="ctl-iters">Stop after</label>
+      <select id="ctl-iters">
+        <option value="" selected>no iteration limit</option>
+        <option value="1">1 candidate</option>
+        <option value="5">5 candidates</option>
+        <option value="20">20 candidates</option>
+        <option value="100">100 candidates</option>
+      </select>
+
+      <button class="btn" id="ctl-start">Start session</button>
+      <span class="muted" id="ctl-msg"></span>
+    </div>
+    <p class="sub" style="margin:10px 0 0">
+      Whichever limit is reached first stops the session. It runs under systemd,
+      so it survives closing this page.
+    </p>
+  </div>
+
+  <div id="control-running" hidden>
+    <div class="control-row">
+      <span class="badge good"><span class="dot"></span><span id="ctl-state">running</span></span>
+      <span id="ctl-progress-text" class="muted"></span>
+      <button class="btn secondary" id="ctl-stop">Stop after this candidate</button>
+      <span class="muted" id="ctl-msg2"></span>
+    </div>
+    <div class="meter" id="ctl-meter" hidden><div class="meter-fill" id="ctl-fill"></div></div>
+    <div class="kpis" id="ctl-live" style="margin-top:12px"></div>
+  </div>
+
+  <div class="control-row" style="margin-top:14px" id="control-schedule-row">
+    <label class="switch">
+      <input type="checkbox" id="ctl-schedule">
+      <span>Also run automatically every night at 22:00</span>
+    </label>
+    <span class="muted" id="ctl-next"></span>
+  </div>
+</div>

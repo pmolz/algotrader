@@ -3,6 +3,8 @@
 
 {% block content %}
 
+{% if control_enabled %}{% include "_control.html" %}{% endif %}
+
 {# The hero leads with the number that matters. Zero promoted is the healthy
    result, so it is stated plainly rather than dressed up as a problem. #}
 <div class="card">
@@ -121,6 +123,9 @@
 {% block scripts %}
 <script type="module">
   import { barsH, stacked } from "{{ url_for('static', filename='charts.js') }}";
+  import { initControl } from "{{ url_for('static', filename='control.js') }}";
+
+  initControl();
 
   const stages = {{ stages | tojson_safe | safe }};
   const activity = {{ activity | tojson_safe | safe }};
