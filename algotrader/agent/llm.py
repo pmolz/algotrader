@@ -73,6 +73,9 @@ class OllamaEndpoint:
     name: str
     url: str
     model: str
+    # How the dashboard reads this machine's GPU: "local", "ssh:<target>", or
+    # None for no telemetry. Selection ignores it entirely.
+    gpu: str | None = None
 
     def describe(self) -> str:
         return f"{self.name} ({self.url}, {self.model})"
@@ -94,13 +97,14 @@ def parse_endpoints(cfg: dict) -> list[OllamaEndpoint]:
     endpoints: dict[str, OllamaEndpoint] = {}
     for name, entry in raw.items():
         if isinstance(entry, str):
-            url, model = entry, default_model
+            url, model, gpu = entry, default_model, None
         elif isinstance(entry, dict):
             url = entry.get("url") or DEFAULT_OLLAMA_URL
             model = entry.get("model") or default_model
+            gpu = entry.get("gpu")
         else:
             raise TypeError(f"agent.hosts.{name} must be a url or a mapping")
-        endpoints[name] = OllamaEndpoint(name, normalize_url(url), model)
+        endpoints[name] = OllamaEndpoint(name, normalize_url(url), model, gpu)
 
     preference = get(cfg, "agent.host_preference") or list(endpoints)
     ordered = [endpoints[n] for n in preference if n in endpoints]

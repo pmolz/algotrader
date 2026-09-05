@@ -3,6 +3,7 @@
 
 {% block content %}
 
+{% if host_monitor %}{% include "_hosts.html" %}{% endif %}
 {% if control_enabled %}{% include "_control.html" %}{% endif %}
 
 {# The hero leads with the number that matters. Zero promoted is the healthy
@@ -121,6 +122,7 @@
 {% endblock %}
 
 {% block scripts %}
+{% if host_monitor %}<script src="{{ url_for('static', filename='hosts.js') }}" defer></script>{% endif %}
 <script type="module">
   import { barsH, stacked } from "{{ url_for('static', filename='charts.js') }}";
   import { initControl } from "{{ url_for('static', filename='control.js') }}";

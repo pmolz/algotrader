@@ -29,7 +29,7 @@ from flask import Flask, abort, jsonify, render_template, request
 from flask.json.provider import DefaultJSONProvider
 
 from ..config import REPO_ROOT, get, load_config
-from . import control, queries
+from . import control, hoststatus, queries
 from .equity import EquityUnavailable, cached_curve, equity_curve, json_safe
 from .guard import local_only
 
@@ -108,6 +108,7 @@ def create_app(cfg: dict | None = None) -> Flask:
                 "cur": _filters(request.args),
                 "qs": request.query_string.decode(),
                 "control_enabled": bool(get(cfg, "dashboard.allow_control", True)),
+                "host_monitor": bool(get(cfg, "dashboard.host_monitor", True)),
             }
         finally:
             conn.close()
@@ -257,6 +258,14 @@ def create_app(cfg: dict | None = None) -> Flask:
             return jsonify(control.set_timer(bool(payload.get("enabled"))))
         except control.ControlError as e:
             return jsonify({"error": str(e)}), 409
+
+    @app.route("/api/hosts")
+    def api_hosts():
+        if not bool(get(cfg, "dashboard.host_monitor", True)):
+            return jsonify({"enabled": False, "hosts": []})
+        payload = hoststatus.collect(cfg)
+        payload["enabled"] = True
+        return jsonify(payload)
 
     @app.route("/api/stats")
     def api_stats():

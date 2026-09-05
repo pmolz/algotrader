@@ -106,6 +106,13 @@ dashboard:
   # Equity curves are re-run in the sandbox and cached by (code, data, costs).
   cache_dir: experiments/equity_cache
   equity_timeout_s: 60
+  # Show a live status card for the machines in agent.hosts: reachable, model
+  # resident, and GPU load/temp where the host declares a `gpu` source. GPU
+  # numbers for a remote box come from `nvidia-smi` over SSH, so that host needs
+  # key-based SSH from here. Turn this off if you bind the dashboard off
+  # loopback — it is read-only, but it does make outbound SSH connections.
+  host_monitor: true
+
   # Let the dashboard start/stop agent sessions and toggle the nightly schedule.
   # These are the only endpoints with side effects. Set false to make the whole
   # app strictly read-only (recommended if you ever bind it off loopback).
