@@ -165,3 +165,72 @@ def test_retries_are_capped_by_config(trending_ohlcv, tmp_path):
                      timeframe="1d", db=ExperimentDB(cfg["experiments"]["db_path"]))
     loop.step()
     assert len(calls) == 1 + 3, f"expected 1 proposal + 3 retries, got {len(calls)}"
+
+
+# -- what earns a repair attempt, and what must not ---------------------------
+from algotrader.agent.loop import _is_repairable  # noqa: E402
+
+
+def test_crashes_and_tradability_failures_are_repairable():
+    """Both mean the idea was never actually evaluated."""
+    for reason in ("FAIL codegen", "FAIL strategy runtime",
+                   "FAIL never traded: the entry condition never fired",
+                   "FAIL too few trades: 3 < 100 (0.01/day)",
+                   "FAIL overtrading: 6.7 trades/day > 4.0"):
+        assert _is_repairable(["PASS lookahead", reason]), reason
+
+
+def test_performance_verdicts_are_never_repairable():
+    """Retrying because the Sharpe was too low is asking the model to search
+    until the dev set says yes. That is overfitting, and the gauntlet exists to
+    stop it — so these are recorded and the loop moves on."""
+    for reason in ("FAIL walk-forward: mean OOS Sharpe -4.90 < 1.0",
+                   "FAIL cost stress: Sharpe goes negative under stress",
+                   "FAIL deflated Sharpe: DSR=0.00 after 40 trials",
+                   "FAIL drawdown: -52% exceeds 35% limit",
+                   "FAIL final OOS holdout: Sharpe 0.20 < 1.0",
+                   "FAIL vs benchmark: Sharpe 0.10 <= buy&hold 0.90",
+                   "FAIL lookahead: signal depends on future data"):
+        assert not _is_repairable(["PASS lookahead", reason]), reason
+
+
+def test_a_passing_candidate_is_not_repaired():
+    assert not _is_repairable(["PASS lookahead", "PASS trading intensity: 1.2/day"])
+    assert not _is_repairable([])
+
+
+def test_a_repair_keeps_the_original_hypothesis(trending_ohlcv, tmp_path):
+    """The retry reply explains the fix; it is not a new idea. Letting it
+    overwrite the hypothesis files 'the error was caused by a missing column' as
+    the reason the strategy was tried, and that text feeds lessons_context."""
+    from algotrader.agent.loop import AgentLoop
+    from algotrader.agent.memory import ExperimentDB
+    from algotrader.config import load_config
+
+    cfg = load_config()
+    cfg["agent"]["use_sandbox"] = False
+    cfg["agent"]["max_fix_attempts"] = 1
+    cfg["experiments"]["db_path"] = str(tmp_path / "e.db")
+    cfg["experiments"]["generated_code_dir"] = str(tmp_path / "gen")
+
+    n = []
+
+    class FakeLLM:
+        def describe(self): return "fake"
+        def available(self): return True
+        def complete(self, system, user, **kw):
+            n.append(1)
+            if len(n) == 1:
+                return ("HYPOTHESIS: Liquidations overshoot and revert.\n"
+                        "```python\n" + CRASHES_AT_RUNTIME + "```")
+            return ("The error you encountered is due to a missing column.\n"
+                    "```python\nclass Fixed(Strategy):\n    name = \"fixed\"\n"
+                    "    def generate_signals(self, df):\n"
+                    "        return StrategyResult(positions=df[\"close\"] * 0)\n```")
+
+    loop = AgentLoop(trending_ohlcv, cfg, llm=FakeLLM(), symbol="X", source="s",
+                     timeframe="1d", db=ExperimentDB(cfg["experiments"]["db_path"]))
+    result = loop.step()
+
+    assert result["hypothesis"] == "Liquidations overshoot and revert."
+    assert "error you encountered" not in result["hypothesis"]

@@ -283,7 +283,11 @@ class NightlySession:
                     text, source = out, "llm"
             except Exception as e:  # noqa: BLE001
                 self.log(f"reflection failed ({type(e).__name__}: {e}); storing digest")
-        self.db.record_reflection(text, run_id=run_id, source=source)
+        regimes = {f"{sp.source}:{sp.timeframe}" for sp in self.specs}
+        self.db.record_reflection(
+            text, run_id=run_id, source=source,
+            regime=regimes.pop() if len(regimes) == 1 else None,
+        )
         self.log(f"reflection stored ({source}, {len(text)} chars)")
 
     # -- the session -------------------------------------------------------------

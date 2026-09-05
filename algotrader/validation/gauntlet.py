@@ -90,6 +90,11 @@ def run_gauntlet(
     # friction. Nothing survives that, and a candidate churning at that rate is
     # not a near miss worth walk-forwarding — it is a different kind of answer.
     dev_res = _bt(dev)
+    # Publish these unconditionally. Nearly every candidate dies before the OOS
+    # holdout, and if the only metrics recorded are the survivors' then the
+    # experiment log has a Sharpe for 0% of rows and the agent's memory cannot
+    # tell a near miss from a catastrophe.
+    checks["dev_metrics"] = dict(dev_res.metrics)
     per_day = float(dev_res.meta.get("trades_per_day", 0.0))
     drag = float(dev_res.meta.get("cost_drag_annual", 0.0))
     round_trip = 2.0 * (bt["fee_pct"] + bt["slippage_pct"])

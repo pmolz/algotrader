@@ -190,7 +190,15 @@ Here was your code:
 ```
 
 Fix it and KEEP THE SAME IDEA — do not substitute a different, simpler strategy. \
-Change only what the error requires. Common causes:
+Change only what the error requires.
+
+If the failure is about how OFTEN it trades, that is a calibration problem, not a
+flaw in the idea. The target window is 0.4 to 4 trades per day (roughly 100-1400
+trades over the backtest). Too few: relax the entry threshold, shorten the
+lookback, or drop the most restrictive filter. Too many: tighten the threshold,
+add a trend or volatility filter, or widen the stop so trades last longer.
+
+Other common causes:
   * a column that does not exist (only open, high, low, close, volume do)
   * calling a pandas method on a numpy array — wrap it with pd.Series(...)
   * a parameter without a default, when the framework instantiates with no args

@@ -39,6 +39,33 @@ from .sandbox import (
 )
 
 
+# Failures worth spending another LLM call on. Two kinds qualify: the code did
+# not run, and the strategy is untestable because of how often it trades.
+#
+# The second is a calibration problem, not a result. "Fired once in 28,000 bars"
+# and "traded 6.7 times a day" both mean the idea was never actually evaluated,
+# and the fix — loosen or tighten the entry filter — is one the model can make
+# from the number in the message without ever seeing a P&L.
+#
+# Verdicts about PERFORMANCE are deliberately absent. Retrying a candidate
+# because its Sharpe was too low is asking the model to search until the dev set
+# says yes, which is the definition of overfitting and the thing this whole
+# gauntlet exists to prevent. Those get recorded and the loop moves on.
+_REPAIRABLE_PREFIXES = (
+    "FAIL codegen",
+    "FAIL strategy runtime",
+    "FAIL never traded",
+    "FAIL too few trades",
+    "FAIL overtrading",
+)
+
+
+def _is_repairable(reasons: list[str] | None) -> bool:
+    if not reasons:
+        return False
+    return any(str(reasons[-1]).startswith(p) for p in _REPAIRABLE_PREFIXES)
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -57,6 +84,8 @@ class AgentLoop:
         self.symbol = symbol
         self.source = source
         self.timeframe = timeframe
+        # Advice earned on daily equities does not transfer to 15m crypto.
+        self.regime = f"{source}:{timeframe}"
         # An unattended session shares one DB handle and tags every experiment
         # with its run id, so the morning report can scope to that session.
         self.db = db or ExperimentDB(get(cfg, "experiments.db_path"))
@@ -118,7 +147,8 @@ class AgentLoop:
     def _propose(self) -> tuple[str, str, str]:
         """Return (hypothesis, code, strategy_source_label)."""
         lessons = self.db.lessons_context(
-            n_recent=get(self.cfg, "agent.memory_context_n", 8)
+            n_recent=get(self.cfg, "agent.memory_context_n", 8),
+            symbol=self.symbol, regime=self.regime,
         )
         if self._llm_ready():
             user = PROPOSE_TEMPLATE.format(
@@ -182,13 +212,18 @@ class GeneratedSma(Strategy):
         max_attempts = int(get(self.cfg, "agent.max_fix_attempts", 2))
         attempts = 0
         while (not rep["ok"] and self._llm_ready() and attempts < max_attempts
-               and rep["reasons"] in (["FAIL codegen"], ["FAIL strategy runtime"])):
+               and _is_repairable(rep["reasons"])):
             attempts += 1
             try:
                 text = self.llm.complete(
                     SYSTEM_PROMPT, FIX_TEMPLATE.format(error=rep["error"], code=code)
                 )
-                hypothesis, code = parse_response(text)
+                # Keep the ORIGINAL hypothesis. A repair changes the code, not
+                # the idea, and the model's reply here explains the fix — letting
+                # that overwrite the hypothesis files "the error was caused by a
+                # missing column" in the experiment log as the reason the
+                # strategy was tried, which then feeds lessons_context.
+                _discarded, code = parse_response(text)
                 rep = self._evaluate(code, n_trials)
             except Exception:  # noqa: BLE001
                 break
@@ -196,7 +231,9 @@ class GeneratedSma(Strategy):
         name = rep.get("strategy_name") or f"({gen_src})"
         params = rep.get("params") or {}
         checks = rep.get("checks") or {}
-        metrics = checks.get("oos_holdout") or checks.get("deflated_sharpe", {})
+        # Prefer the honest out-of-sample numbers; fall back to the dev-set ones
+        # so a rejected candidate is still a data point rather than a blank row.
+        metrics = checks.get("oos_holdout") or checks.get("dev_metrics") or {}
 
         exp_id = self.db.record(
             symbol=self.symbol, source=self.source, timeframe=self.timeframe,
