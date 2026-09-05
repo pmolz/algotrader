@@ -80,7 +80,7 @@ def _patch(session, monkeypatch, **stub_kw):
 
     monkeypatch.setattr(session, "_load_data", fake_load)
 
-    def fake_agentloop(df, cfg, *, symbol, source, timeframe, db, run_id):
+    def fake_agentloop(df, cfg, *, symbol, source, timeframe, db, run_id, **kw):
         st = StubLoop(db, symbol, **stub_kw)
         st.run_id = run_id
         stubs.append(st)
@@ -180,7 +180,7 @@ def test_run_row_and_experiment_tagging(cfg, monkeypatch):
 def test_reflection_is_stored_without_an_llm(cfg, monkeypatch):
     s = _session(cfg, max_hours=None, max_iterations=2, reflect_every=0)
     _patch(s, monkeypatch)
-    monkeypatch.setattr("algotrader.agent.nightly.make_client", lambda *a: None)
+    monkeypatch.setattr("algotrader.agent.nightly.make_client", lambda *a, **k: None)
     r = s.run()
     refl = s.db.reflections_for_run(r.run_id)
     assert len(refl) == 1
@@ -190,6 +190,9 @@ def test_reflection_is_stored_without_an_llm(cfg, monkeypatch):
 
 def test_reflection_uses_the_llm_when_available(cfg, monkeypatch):
     class FakeLLM:
+        def describe(self):
+            return "fake"
+
         def available(self):
             return True
 
@@ -197,9 +200,11 @@ def test_reflection_uses_the_llm_when_available(cfg, monkeypatch):
             assert "Ideas tried" in user
             return "  Stop testing SMA crossovers; try volume-based ideas.  "
 
+    # The session resolves its endpoint once at construction and shares that
+    # client with every iteration, so this has to be in place beforehand.
+    monkeypatch.setattr("algotrader.agent.nightly.make_client", lambda *a, **k: FakeLLM())
     s = _session(cfg, max_hours=None, max_iterations=1, reflect_every=0)
     _patch(s, monkeypatch)
-    monkeypatch.setattr("algotrader.agent.nightly.make_client", lambda *a: FakeLLM())
     r = s.run()
     refl = s.db.reflections_for_run(r.run_id)
     assert refl[0]["source"] == "llm"
@@ -217,7 +222,7 @@ def test_reflections_feed_back_into_prompt_context(cfg):
 def test_mid_session_reflection_fires_on_cadence(cfg, monkeypatch):
     s = _session(cfg, max_hours=None, max_iterations=4, reflect_every=2)
     _patch(s, monkeypatch)
-    monkeypatch.setattr("algotrader.agent.nightly.make_client", lambda *a: None)
+    monkeypatch.setattr("algotrader.agent.nightly.make_client", lambda *a, **k: None)
     r = s.run()
     # iterations 2 and 4, plus the final one in the finally block
     assert len(s.db.reflections_for_run(r.run_id)) == 3

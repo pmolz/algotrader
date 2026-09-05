@@ -46,6 +46,9 @@ def main() -> int:
                     help=argparse.SUPPRESS)
     ap.add_argument("--allow-unsandboxed", action="store_true",
                     help="run model-written code in-process (NOT for unattended use)")
+    ap.add_argument("--ollama-host", default=None, metavar="NAME|URL",
+                    help="Ollama endpoint: a name from agent.hosts, a URL, or "
+                         "'auto' (default: agent.host)")
     ap.add_argument("--log-dir", default=get(cfg, "nightly.log_dir", "experiments/logs"))
     args = ap.parse_args()
 
@@ -82,6 +85,7 @@ def main() -> int:
                 session = NightlySession(
                     cfg, specs, budget=budget,
                     allow_unsandboxed=args.allow_unsandboxed or args.no_sandbox,
+                    host=args.ollama_host,
                     log_file=fh,
                 )
                 result = session.run()

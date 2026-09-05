@@ -151,6 +151,7 @@ class NightlySession:
         kind: str = "nightly",
         allow_unsandboxed: bool = False,
         log_file: TextIO | None = None,
+        host: str | None = None,
     ):
         self.cfg = cfg
         self.specs = symbols
@@ -181,6 +182,19 @@ class NightlySession:
         self.db = ExperimentDB(get(cfg, "experiments.db_path"))
         self.provider = get(cfg, "agent.provider")
         self.model = get(cfg, "agent.model")
+        # Resolve the LLM endpoint once for the whole session and share it with
+        # every AgentLoop, so the run row records which machine did the work.
+        self.llm = make_client(cfg, host=host, logger=self.log)
+        self.llm_available = self.llm is not None and self.llm.available()
+        # describe() is cosmetic — never let logging take down a session.
+        self.host = (getattr(self.llm, "describe", lambda: self.model)()
+                     if self.llm is not None else None)
+        if not self.llm_available:
+            # Worth shouting about: the session will still run, but every
+            # candidate will come from the offline baseline mutator, which is a
+            # plumbing test rather than research.
+            self.log(f"WARNING no LLM endpoint available ({self.host or self.provider}) "
+                     f"— the session will fall back to offline baseline mutation")
 
     # -- plumbing ----------------------------------------------------------------
     def log(self, msg: str = "") -> None:
@@ -257,7 +271,7 @@ class NightlySession:
         if not exps:
             return
         summary = session_digest_text(exps)
-        llm = make_client(self.provider, self.model)
+        llm = self.llm
         text, source = summary, "heuristic"
         if llm is not None and llm.available():
             try:
@@ -278,10 +292,12 @@ class NightlySession:
         run_id = self.db.start_run(
             kind=self.kind, symbols=symbols, provider=self.provider,
             model=self.model, sandbox=self.sandbox, budget=self.budget.as_dict(),
+            host=self.host,
         )
         self.log(f"=== session {run_id} start ===")
         self.log(
             f"provider={self.provider} model={self.model} "
+            f"llm={self.host or 'none'} "
             f"sandbox={'on' if self.sandbox else 'OFF'} "
             f"budget={json.dumps(self.budget.as_dict())}"
         )
@@ -297,7 +313,8 @@ class NightlySession:
                 self.log("no symbol had usable data — nothing to do")
             else:
                 loops = [
-                    AgentLoop(df, self.cfg, symbol=spec.symbol, source=spec.source,
+                    AgentLoop(df, self.cfg, llm=self.llm,
+                              symbol=spec.symbol, source=spec.source,
                               timeframe=spec.timeframe, db=self.db, run_id=run_id)
                     for spec, df in loaded
                 ]

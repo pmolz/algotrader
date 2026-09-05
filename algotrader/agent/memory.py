@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS runs (
     symbols TEXT,              -- JSON list of symbols worked on
     provider TEXT,
     model TEXT,
+    host TEXT,                 -- which LLM endpoint served this session
     sandbox INTEGER,
     budget_json TEXT,          -- the limits this session was given
     iterations INTEGER,        -- completed iterations
@@ -86,6 +87,9 @@ class ExperimentDB:
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(experiments)")}
         if "run_id" not in have:
             self.conn.execute("ALTER TABLE experiments ADD COLUMN run_id INTEGER")
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(runs)")}
+        if "host" not in have:
+            self.conn.execute("ALTER TABLE runs ADD COLUMN host TEXT")
 
     def record(
         self,
@@ -176,15 +180,16 @@ class ExperimentDB:
         model: str | None,
         sandbox: bool,
         budget: dict,
+        host: str | None = None,
     ) -> int:
         """Open a run row. Written up-front so a killed session still leaves a
         trace with finished_at NULL — the morning report flags that."""
         cur = self.conn.execute(
             """INSERT INTO runs
-               (started_at, kind, symbols, provider, model, sandbox, budget_json,
-                iterations, promoted, errors)
-               VALUES (?,?,?,?,?,?,?,0,0,0)""",
-            (time.time(), kind, json.dumps(symbols), provider, model,
+               (started_at, kind, symbols, provider, model, host, sandbox,
+                budget_json, iterations, promoted, errors)
+               VALUES (?,?,?,?,?,?,?,?,0,0,0)""",
+            (time.time(), kind, json.dumps(symbols), provider, model, host,
              int(sandbox), json.dumps(budget)),
         )
         self.conn.commit()

@@ -19,6 +19,7 @@ experiments/*.lock
 experiments/equity_cache/
 .env
 config/secrets.yaml
+config/local.yaml   # machine-specific: LAN addresses, host preferences
 
 # OS
 .DS_Store

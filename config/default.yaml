@@ -40,6 +40,30 @@ agent:
   # far more often (measured: qwen3.5:9b produced 3 unusable strategies out of 4).
   # Step up to qwen2.5-coder:14b if the machine has the headroom.
   model: qwen2.5-coder:7b
+
+  # Which Ollama server to talk to: "auto", a name from `hosts`, or a bare URL.
+  # $OLLAMA_HOST and --ollama-host override this. "auto" walks host_preference
+  # and takes the first endpoint that answers AND has the model pulled; naming
+  # one pins it (a pinned host that is down means offline fallback, not a
+  # silent move to another machine).
+  host: auto
+  # Preference order for "auto". Names not defined in `hosts` are skipped, so
+  # this can mention a laptop you haven't set up yet.
+  host_preference: [laptop, local]
+  hosts:
+    local: http://127.0.0.1:11434
+    # Add the networked box in config/local.yaml, e.g.
+    #   agent:
+    #     hosts:
+    #       laptop: {url: http://192.168.1.42:11434, model: qwen2.5-coder:7b}
+    # The mapping form lets a smaller-VRAM machine serve a smaller model.
+
+  # Generation budget. A partially-offloaded 14B over the LAN can take minutes
+  # per candidate; a timeout here costs a whole iteration.
+  request_timeout_s: 900
+  # How long to wait when testing whether an endpoint is alive.
+  probe_timeout_s: 3
+
   max_iterations: 10
   # Number of past experiments (worst + best) fed back as "lessons learned".
   memory_context_n: 8

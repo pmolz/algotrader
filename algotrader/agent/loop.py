@@ -45,6 +45,7 @@ class AgentLoop:
         timeframe: str,
         db: ExperimentDB | None = None,
         run_id: int | None = None,
+        llm=None,
     ):
         self.df = df
         self.cfg = cfg
@@ -57,7 +58,9 @@ class AgentLoop:
         self.run_id = run_id
         self.generated_dir = Path(get(cfg, "experiments.generated_code_dir"))
         self.generated_dir.mkdir(parents=True, exist_ok=True)
-        self.llm = make_client(get(cfg, "agent.provider"), get(cfg, "agent.model"))
+        # An unattended session resolves one endpoint up front and injects the
+        # shared client, so every iteration of a night reports the same host.
+        self.llm = llm if llm is not None else make_client(cfg)
 
         self.use_sandbox = bool(get(cfg, "agent.use_sandbox", False))
         self.sandbox_limits = SandboxLimits(

@@ -72,6 +72,9 @@ def test_codegen_failure_earns_a_fix_retry(trending_ohlcv, tmp_path, monkeypatch
     calls = []
 
     class FakeLLM:
+        def describe(self):
+            return "fake"
+
         def available(self):
             return True
 
@@ -90,10 +93,11 @@ def test_codegen_failure_earns_a_fix_retry(trending_ohlcv, tmp_path, monkeypatch
                 "```"
             )
 
-    monkeypatch.setattr("algotrader.agent.loop.make_client", lambda *a: FakeLLM())
+    monkeypatch.setattr("algotrader.agent.loop.make_client", lambda *a, **k: FakeLLM())
     loop = AgentLoop(trending_ohlcv, cfg, symbol="T", source="test", timeframe="1d")
     r = loop.step()
 
     assert len(calls) == 2, "a codegen failure should trigger exactly one fix-retry"
     assert "failed to run" in calls[1]
     assert r["strategy"] == "fixed"      # the retry's strategy is what got judged
+

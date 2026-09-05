@@ -128,11 +128,53 @@ agent:
   model: qwen2.5-coder:7b   # or qwen3.5:9b, etc.
 ```
 
+### Choosing which machine serves the model
+
+The model can live on this box, on another machine on the LAN, or both. Name the
+endpoints under `agent.hosts` and pick one with `agent.host`:
+
+```yaml
+agent:
+  host: auto                        # "auto" | a name from hosts | a bare URL
+  host_preference: [laptop, local]  # order "auto" tries them in
+  hosts:
+    local: http://127.0.0.1:11434
+    laptop:                         # mapping form: per-endpoint model override
+      url: http://192.168.1.42:11434
+      model: qwen2.5-coder:3b       # a 4GB laptop GPU may only fit a smaller one
+```
+
+Put machine-specific addresses in `config/local.yaml` (gitignored), not in
+`default.yaml`.
+
+```bash
+python scripts/check_llm.py                    # who's up, and who'd get the work
+python scripts/run_agent.py   --ollama-host laptop --symbol BTC/USD --iterations 3
+python scripts/run_nightly.py --ollama-host local
+```
+
+Precedence is `--ollama-host` > `$OLLAMA_HOST` > `agent.host`. The rules:
+
+- **`auto`** walks `host_preference` and takes the first endpoint that answers
+  *and* has the model pulled — a reachable server missing the model is no more
+  use than one that's off.
+- **Naming a host pins it.** If a pinned host is down the session drops to the
+  offline fallback rather than quietly running somewhere else; the run row
+  records which machine generated the strategies, so that claim has to be true.
+- **A host that dies mid-session is failed over on the next iteration** (under
+  `auto`), because losing one candidate is much cheaper than losing eight hours.
+  One that comes back gets picked up again.
+
+A session resolves its endpoint once at startup, logs it, and stores it in
+`runs.host`. If nothing is available it says so loudly — an unnoticed night of
+offline baseline mutation looks like research and isn't.
+
 Notes:
 - Smaller general models (<=3B) tend to emit broken code — expect many retries.
   Use a 7B+ coder model for real work.
 - To use Claude instead: set `provider: anthropic`, `pip install -e ".[agent]"`,
-  and put `ANTHROPIC_API_KEY` in `.env`.
+  and put `ANTHROPIC_API_KEY` in `.env`. Note that a Claude *subscription* seat
+  is not API access — the API bills separately through console.anthropic.com.
 - With no working provider, the loop falls back to mutating baselines so you can
   still exercise the whole pipeline offline.
 
