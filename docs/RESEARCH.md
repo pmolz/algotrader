@@ -87,14 +87,67 @@ research:
 
 ## The scheduled researcher
 
-`research/PROMPT.md` is the standing assignment. It runs weekly from cron on the
-machine that holds the repo:
+`research/PROMPT.md` is the standing assignment. It runs weekly on the machine
+that holds the repo:
 
 ```bash
 bash scripts/research_briefs.sh --dry-run   # show what would run
 bash scripts/research_briefs.sh             # run a pass now
-bash scripts/install_cron.sh                # includes the Sunday 06:00 entry
 ```
+
+### Scheduling it (systemd timer)
+
+Arch/CachyOS ships no cron daemon, so this is the path here — and `Persistent=true`
+reruns a pass the box slept through, which for a weekly job is the difference
+between a late week and a lost one. `scripts/install_cron.sh` also carries a
+Sunday 06:00 entry for machines that do run cron.
+
+`~/.config/systemd/user/algotrader-research.service`:
+
+```ini
+[Unit]
+Description=algotrader weekly research pass (writes strategy briefs)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Projects/algotrader
+ExecStart=/bin/bash %h/Projects/algotrader/scripts/research_briefs.sh
+TimeoutStartSec=3600
+# Exit 2 is "last week's briefs are still unreviewed" — a deliberate skip, not
+# a failure, and it should not surface as a failed unit.
+SuccessExitStatus=0 2
+Nice=10
+
+[Install]
+WantedBy=default.target
+```
+
+`~/.config/systemd/user/algotrader-research.timer`:
+
+```ini
+[Unit]
+Description=Run the algotrader research pass on Sunday mornings
+
+[Timer]
+OnCalendar=Sun *-*-* 06:00:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now algotrader-research.timer
+systemctl --user list-timers algotrader-research.timer
+journalctl --user -u algotrader-research.service -n 50
+```
+
+A user timer only fires while you are logged in unless lingering is on
+(`loginctl enable-linger $USER`).
 
 The script runs `claude -p` headless against `research/PROMPT.md` with WebSearch,
 using the CLI login already on the box. `--allowedTools` scopes it so `Write`
