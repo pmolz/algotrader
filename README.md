@@ -15,8 +15,10 @@ its own failures* over time.
 ## Architecture
 
 ```
-Orchestrator (agent loop)
-  1. Propose hypothesis        (LLM)
+Research briefs (Claude, weekly)  ->  research/briefs/*.md
+                                            |
+Orchestrator (agent loop)                   v
+  1. Propose hypothesis        (LLM, implementing a brief if one is available)
   2. Generate strategy code    (LLM -> sandbox)
   3. Backtest                  (vectorized engine)
   4. Validation gauntlet       (walk-forward, OOS, costs, multiple-testing)
@@ -36,6 +38,7 @@ Package layout:
 | `algotrader/validation` | Walk-forward, out-of-sample, cost sensitivity, deflated Sharpe |
 | `algotrader/sentiment`  | Free sentiment sources (Reddit, GDELT, Fear & Greed) |
 | `algotrader/agent`      | LLM loop: propose -> code -> evaluate -> reflect |
+| `algotrader/agent/research.py` | External research briefs: the idea supply the local model codes from |
 | `algotrader/live`       | Paper/live trading adapters (Alpaca paper first) |
 | `algotrader/agent/nightly.py` | Unattended overnight session (budgets, locking, reflection) |
 | `algotrader/agent/report.py`  | Morning report generator |
@@ -226,6 +229,42 @@ Notes:
   is not API access — the API bills separately through console.anthropic.com.
 - With no working provider, the loop falls back to mutating baselines so you can
   still exercise the whole pipeline offline.
+
+## Research briefs — Claude thinks, the local model codes
+
+The local 7B is good at turning a specified idea into contract-correct Python
+and bad at inventing ideas: left alone it converges on the same few textbook
+mechanisms. So the idea supply is split off from the coding.
+
+```
+Claude (weekly, scheduled)          local 7B (nightly)
+  search -> feasibility gate  --->    brief -> contract-correct Python
+  -> research/briefs/*.md             -> gauntlet -> experiment log
+```
+
+A **brief** is a short, sectioned assignment: the mechanism, the ranked score as
+a pandas expression, a starting `entry_q`, ATR multiples, parameter defaults,
+and the pitfalls. The 7B supplies the class name, the contract boilerplate, the
+hold pattern and the risk wiring — the parts it is actually good at.
+
+```bash
+ls research/briefs/                 # three hand-written seeds ship with the repo
+cat research/PROMPT.md              # the standing assignment for the scheduler
+python scripts/run_agent.py --symbol BTC/USD --iterations 3   # picks briefs up automatically
+```
+
+The loop rotates through the library least-attempted-first, retires a brief
+after `research.max_attempts_per_brief` tries, and goes back to inventing its
+own ideas when the library is exhausted or absent. Every candidate records
+`experiments.researched_from`, so you can later check whether researched ideas
+actually cleared more gauntlet stages than self-generated ones.
+
+The gauntlet does not know where a candidate came from. A brief buys an idea a
+place in the queue and nothing else — and since every candidate raises `n_trials`
+and the deflated-Sharpe bar for everything else, the supply is deliberately two
+or three briefs a week rather than a firehose.
+
+Full details, the format, and the feasibility gate: **[docs/RESEARCH.md](docs/RESEARCH.md)**.
 
 ## Development phases (see ROADMAP.md)
 

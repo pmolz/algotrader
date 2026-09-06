@@ -9,6 +9,11 @@ The cost arithmetic is stated as a number the model has to design against, not
 as advice. On 15m bars a round trip pays the spread twice, so an idea that
 cannot clear ~0.3% per trade is arithmetically dead before it is tested, and
 saying so up front is cheaper than letting the gauntlet discover it 200 times.
+
+There are two ways to ask for a strategy. PROPOSE_TEMPLATE asks the model to
+invent one, which is what it does when nothing better is available.
+BRIEF_TEMPLATE hands it an externally-researched idea to implement instead
+(see `research.py`) — a much easier job, and the one a 7B is actually good at.
 """
 
 SYSTEM_PROMPT = """\
@@ -184,6 +189,52 @@ HYPOTHESIS: <mechanism in one or two sentences, then what would falsify it>
 <the Strategy subclass>
 ```
 """
+
+# A brief supplies the idea; this template asks for it to be implemented rather
+# than improved on. The wording fights one specific failure: given a described
+# mechanism alongside a worked example, a small model tends to drift back to the
+# example and return a variation of it. So the instruction is to IMPLEMENT, the
+# brief's own numbers are declared to be the starting point, and the example is
+# demoted in the wording to a formatting reference.
+BRIEF_TEMPLATE = """\
+Market: {symbol} ({timeframe} bars from {source}).
+
+{lessons}
+
+A researcher has handed you a specific idea to implement. This is your
+assignment — do NOT substitute a different strategy, and do NOT fall back to a
+variation of the example below.
+
+--- RESEARCH BRIEF: {title} ---
+{brief}
+--- END BRIEF ---
+
+Here is a complete strategy in the required form. Copy its STRUCTURE only — the
+class shape, the rolling-quantile threshold, the hold pattern, the ATR-sized
+risk levels. Its idea is not your idea:
+
+{example}
+
+Now implement the brief. Requirements:
+
+1. Use the mechanism from the brief. Restate it in your HYPOTHESIS in your own
+   words, including what would falsify it.
+2. Build the ranked score the brief describes, from open/high/low/close/volume
+   only. If the brief names a value this framework does not have, the brief is
+   wrong — build the closest thing you can from those five columns and say so.
+3. Control the trade rate with a ROLLING QUANTILE on that score, starting from
+   the entry_q the brief gives. Target 0.3-1.5 trades per day.
+4. Set stop_loss_pct and take_profit_pct from the brief's ATR multiples, sized
+   so the average winner clears 0.30% costs comfortably.
+5. Give every parameter a default, using the brief's numbers as the defaults.
+
+Return format:
+HYPOTHESIS: <mechanism in one or two sentences, then what would falsify it>
+```python
+<the Strategy subclass>
+```
+"""
+
 
 REFLECT_SYSTEM = """\
 You are a quantitative research lead reviewing an overnight batch of automated \

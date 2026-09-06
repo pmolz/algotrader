@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS experiments (
     gauntlet_json TEXT,        -- full GauntletReport checks
     reasons TEXT,              -- human-readable pass/fail notes
     error TEXT,                -- populated if the run crashed
-    run_id INTEGER             -- FK to runs.id; NULL for ad-hoc runs
+    run_id INTEGER,            -- FK to runs.id; NULL for ad-hoc runs
+    researched_from TEXT       -- research brief id, or NULL if self-generated
 );
 
 CREATE INDEX IF NOT EXISTS idx_experiments_created ON experiments(created_at);
@@ -144,6 +145,8 @@ class ExperimentDB:
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(experiments)")}
         if "run_id" not in have:
             self.conn.execute("ALTER TABLE experiments ADD COLUMN run_id INTEGER")
+        if "researched_from" not in have:
+            self.conn.execute("ALTER TABLE experiments ADD COLUMN researched_from TEXT")
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(runs)")}
         if "host" not in have:
             self.conn.execute("ALTER TABLE runs ADD COLUMN host TEXT")
@@ -167,22 +170,42 @@ class ExperimentDB:
         reasons: list[str] | None,
         error: str | None = None,
         run_id: int | None = None,
+        researched_from: str | None = None,
     ) -> int:
         cur = self.conn.execute(
             """INSERT INTO experiments
                (created_at, symbol, source, timeframe, strategy_name, hypothesis,
                 params_json, code, promoted, metrics_json, gauntlet_json, reasons,
-                error, run_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                error, run_id, researched_from)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 time.time(), symbol, source, timeframe, strategy_name, hypothesis,
                 json.dumps(params), code, int(promoted),
                 json.dumps(metrics or {}), json.dumps(gauntlet_checks or {}),
-                json.dumps(reasons or []), error, run_id,
+                json.dumps(reasons or []), error, run_id, researched_from,
             ),
         )
         self.conn.commit()
         return int(cur.lastrowid)
+
+    def brief_tally(self, symbol: str | None = None) -> dict[str, int]:
+        """How many times each research brief has been coded, for this symbol.
+
+        Feeds `research.BriefLibrary.select`, which rotates through the library
+        least-attempted-first and retires a brief once it has had its attempts.
+        Scoped by symbol for the same reason `recent` is: a brief that died on
+        BTC has not yet been tried on ETH.
+        """
+        clause, args = "", []
+        if symbol:
+            clause, args = "WHERE symbol=?", [symbol]
+        rows = self.conn.execute(
+            f"""SELECT researched_from AS b, COUNT(*) AS c FROM experiments
+                {clause} {"AND" if clause else "WHERE"} researched_from IS NOT NULL
+                GROUP BY researched_from""",
+            args,
+        ).fetchall()
+        return {r["b"]: int(r["c"]) for r in rows}
 
     def total_trials(self, symbol: str | None = None) -> int:
         """Number of experiments run — the honest n_trials for deflated Sharpe."""
@@ -391,6 +414,9 @@ class ExperimentDB:
             metrics=json.loads(r["metrics_json"] or "{}"),
             checks=json.loads(r["gauntlet_json"] or "{}"),
             run_id=r["run_id"] if "run_id" in r.keys() else None,
+            researched_from=(
+                r["researched_from"] if "researched_from" in r.keys() else None
+            ),
         )
         return d
 

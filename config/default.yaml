@@ -91,6 +91,22 @@ agent:
   # recommended before any unattended/overnight runs. Requires: bash sandbox/build.sh
   use_sandbox: false
 
+research:
+  # External research briefs: ideas written by a wider-reading model for the
+  # local coder model to implement. See docs/RESEARCH.md.
+  # Off means the agent invents every idea itself, as it did before briefs.
+  enabled: true
+  briefs_dir: research/briefs
+  # Attempts a single brief gets (per symbol) before it is retired from the
+  # rotation. Re-coding an idea that keeps dying spends a night on one
+  # hypothesis; the codegen repair loop already gets max_fix_attempts within
+  # each of these.
+  max_attempts_per_brief: 3
+  # Characters of brief text allowed into the prompt. It competes for a 7B
+  # model's attention with the lessons block and the worked example, so a brief
+  # that runs long displaces context rather than adding to it.
+  max_chars: 2500
+
 nightly:
   # Markets the unattended session rotates through, one iteration each in turn.
   # Either a plain symbol (uses data.default_source/timeframe) or a mapping.

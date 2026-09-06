@@ -2,8 +2,10 @@
 
 Flow per iteration:
   1. Build a "lessons learned" context from the experiment DB.
-  2. Ask the LLM for a new strategy (hypothesis + code). If no LLM is available,
-     fall back to randomly mutating a baseline so the pipeline still runs offline.
+  2. Ask the LLM for a new strategy (hypothesis + code) — implementing a research
+     brief if one is available, otherwise inventing an idea. If no LLM is
+     available, fall back to randomly mutating a baseline so the pipeline still
+     runs offline.
   3. Load the strategy safely, retrying once with a fix prompt on failure.
   4. Run it through the FULL validation gauntlet with honest n_trials.
   5. Record everything to the DB. Promoted strategies get their code saved.
@@ -26,11 +28,13 @@ from .codegen import load_strategy_class, parse_response
 from .llm import make_client
 from .memory import ExperimentDB
 from .prompts import (
+    BRIEF_TEMPLATE,
     FIX_TEMPLATE,
     PROPOSE_TEMPLATE,
     SYSTEM_PROMPT,
     WORKED_EXAMPLE,
 )
+from .research import BriefLibrary
 from .sandbox import (
     SandboxError,
     SandboxLimits,
@@ -96,6 +100,18 @@ class AgentLoop:
         # shared client, so every iteration of a night reports the same host.
         self.llm = llm if llm is not None else make_client(cfg)
 
+        # Externally-researched ideas for the model to code, if any have been
+        # written. An empty or absent directory is the normal, supported state:
+        # the loop then invents its own ideas exactly as it did before.
+        self.briefs: BriefLibrary | None = None
+        if bool(get(cfg, "research.enabled", True)):
+            self.briefs = BriefLibrary(
+                get(cfg, "research.briefs_dir", "research/briefs"),
+                max_attempts=int(get(cfg, "research.max_attempts_per_brief", 3)),
+            )
+            for problem in self.briefs.problems:
+                print(f"[research] IGNORED malformed brief — {problem}")
+
         self.use_sandbox = bool(get(cfg, "agent.use_sandbox", False))
         self.sandbox_limits = SandboxLimits(
             image=get(cfg, "sandbox.image", "algotrader-sandbox:latest"),
@@ -144,24 +160,44 @@ class AgentLoop:
                 "strategy_name": strategy.name, "params": strategy.params}
 
     # -- generation ---------------------------------------------------------------
-    def _propose(self) -> tuple[str, str, str]:
-        """Return (hypothesis, code, strategy_source_label)."""
+    def _select_brief(self):
+        """The research brief to implement this iteration, or None to invent one.
+
+        Exhausting the library is not a failure — it means every researched idea
+        has had its attempts, and the loop goes back to generating its own until
+        the next batch of briefs lands.
+        """
+        if self.briefs is None:
+            return None
+        return self.briefs.select(self.db.brief_tally(self.symbol))
+
+    def _propose(self) -> tuple[str, str, str, str | None]:
+        """Return (hypothesis, code, strategy_source_label, brief_id)."""
         lessons = self.db.lessons_context(
             n_recent=get(self.cfg, "agent.memory_context_n", 8),
             symbol=self.symbol, regime=self.regime,
         )
         if self._llm_ready():
-            user = PROPOSE_TEMPLATE.format(
-                symbol=self.symbol, timeframe=self.timeframe,
-                source=self.source, lessons=lessons, example=WORKED_EXAMPLE,
-            )
+            brief = self._select_brief()
+            if brief is not None:
+                user = BRIEF_TEMPLATE.format(
+                    symbol=self.symbol, timeframe=self.timeframe,
+                    source=self.source, lessons=lessons, example=WORKED_EXAMPLE,
+                    title=brief.title,
+                    brief=brief.render(int(get(self.cfg, "research.max_chars", 2500))),
+                )
+            else:
+                user = PROPOSE_TEMPLATE.format(
+                    symbol=self.symbol, timeframe=self.timeframe,
+                    source=self.source, lessons=lessons, example=WORKED_EXAMPLE,
+                )
             text = self.llm.complete(SYSTEM_PROMPT, user)
             hypothesis, code = parse_response(text)
-            return hypothesis, code, "llm"
+            return hypothesis, code, "llm", (brief.id if brief else None)
         # offline fallback: mutate a baseline so the plumbing is testable
         return self._offline_proposal()
 
-    def _offline_proposal(self) -> tuple[str, str, str]:
+    def _offline_proposal(self) -> tuple[str, str, str, str | None]:
         fast = random.choice([5, 10, 15, 20])
         slow = random.choice([30, 50, 100, 200])
         code = f'''
@@ -178,7 +214,7 @@ class GeneratedSma(Strategy):
         return StrategyResult(positions=pos)
 '''.strip()
         hyp = f"[offline] SMA crossover {fast}/{slow} — plumbing test, no LLM available."
-        return hyp, code, "offline"
+        return hyp, code, "offline", None
 
     def _load(self, code: str) -> Strategy:
         cls = load_strategy_class(code)
@@ -187,7 +223,7 @@ class GeneratedSma(Strategy):
     # -- one iteration ------------------------------------------------------------
     def step(self) -> dict:
         try:
-            hypothesis, code, gen_src = self._propose()
+            hypothesis, code, gen_src, brief_id = self._propose()
         except Exception as e:  # noqa: BLE001
             err = f"proposal failed: {type(e).__name__}: {e}"
             exp_id = self.db.record(
@@ -195,6 +231,7 @@ class GeneratedSma(Strategy):
                 strategy_name="(proposal)", hypothesis="", params={},
                 code=None, promoted=False, metrics=None, gauntlet_checks=None,
                 reasons=["FAIL proposal"], error=err, run_id=self.run_id,
+                researched_from=None,
             )
             return {"id": exp_id, "promoted": False, "error": err}
 
@@ -240,7 +277,7 @@ class GeneratedSma(Strategy):
             strategy_name=name, hypothesis=hypothesis, params=params,
             code=code, promoted=rep["promoted"], metrics=metrics,
             gauntlet_checks=checks, reasons=rep["reasons"], error=rep["error"],
-            run_id=self.run_id,
+            run_id=self.run_id, researched_from=brief_id,
         )
 
         if rep["promoted"]:
@@ -249,6 +286,7 @@ class GeneratedSma(Strategy):
         return {
             "id": exp_id,
             "symbol": self.symbol,
+            "brief": brief_id,
             "promoted": rep["promoted"],
             "strategy": name,
             "hypothesis": hypothesis,
@@ -261,6 +299,8 @@ class GeneratedSma(Strategy):
         for i in range(iterations):
             print(f"\n=== Iteration {i + 1}/{iterations} ===")
             r = self.step()
+            if r.get("brief"):
+                print(f"Brief: {r['brief']}")
             print(f"[{r.get('strategy')}] {r.get('hypothesis', '')}")
             status = "PROMOTED ✅" if r.get("promoted") else "REJECTED ❌"
             print(f"Gauntlet: {status}")
