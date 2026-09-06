@@ -87,9 +87,44 @@ research:
 
 ## The scheduled researcher
 
-`research/PROMPT.md` is the standing assignment. It runs weekly as a scheduled
-cloud agent, opens a PR against `research/briefs/`, and never runs the agent
-loop or touches the default branch. Manage it with `/schedule` in Claude Code.
+`research/PROMPT.md` is the standing assignment. It runs weekly from cron on the
+machine that holds the repo:
+
+```bash
+bash scripts/research_briefs.sh --dry-run   # show what would run
+bash scripts/research_briefs.sh             # run a pass now
+bash scripts/install_cron.sh                # includes the Sunday 06:00 entry
+```
+
+The script runs `claude -p` headless against `research/PROMPT.md` with WebSearch,
+using the CLI login already on the box. `--allowedTools` scopes it so `Write`
+cannot leave `research/briefs/` and `Bash` can only run the format checks: with
+no TTY a permission prompt would be a hang rather than a question, and the worst
+outcome of a bad run should be a bad brief, not a bad commit.
+
+**It writes files and stops.** No commit, no push, no PR. Sunday's briefs sit in
+the working tree until you have read them:
+
+```bash
+git diff -- research/briefs
+```
+
+A research agent that could merge its own ideas into the search would be a
+research agent with no review step, and the review is the part that has to stay
+human. The script also refuses to start when `research/briefs` already has
+uncommitted changes — otherwise a second week's output lands beside an
+unreviewed first week's and `git diff` stops telling you which is which.
+
+Cron does not fire while the machine is suspended; the same caveat and the
+systemd-timer alternative in [docs/NIGHTLY.md](NIGHTLY.md) apply here.
+
+### Running it in the cloud instead
+
+`research/PROMPT.md` is deliberately the only copy of the assignment, so a
+scheduled cloud agent (`/schedule` in Claude Code) can run the same job from the
+same file and open a PR instead. That path needs your claude.ai account linked to
+GitHub, which on a managed enterprise seat is usually an admin setting rather
+than something you can enable yourself.
 
 Two or three briefs a week, deliberately. Every candidate coded raises
 `n_trials` and therefore the deflated-Sharpe bar for everything else in the log.

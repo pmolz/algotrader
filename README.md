@@ -249,9 +249,14 @@ hold pattern and the risk wiring — the parts it is actually good at.
 
 ```bash
 ls research/briefs/                 # three hand-written seeds ship with the repo
-cat research/PROMPT.md              # the standing assignment for the scheduler
+cat research/PROMPT.md              # the standing assignment for the researcher
+bash scripts/research_briefs.sh     # one research pass (cron runs this Sundays)
+git diff -- research/briefs         # review what it wrote, commit what you like
 python scripts/run_agent.py --symbol BTC/USD --iterations 3   # picks briefs up automatically
 ```
+
+The research pass runs `claude -p` headless from cron, writes briefs, and
+**stops** — no commit, no PR. The review is the part that stays human.
 
 The loop rotates through the library least-attempted-first, retires a brief
 after `research.max_attempts_per_brief` tries, and goes back to inventing its
