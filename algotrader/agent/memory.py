@@ -39,6 +39,12 @@ _FAMILIES: list[tuple[str, tuple[str, ...]]] = [
 ]
 
 
+# The canonical family vocabulary. Research briefs declare a `family` and this
+# module classifies strategies into the same set; two spellings of one family
+# would eventually be cross-referenced and disagree.
+FAMILY_LABELS: tuple[str, ...] = tuple(label for label, _ in _FAMILIES) + ("other",)
+
+
 def _clip(text: str, n: int) -> str:
     t = " ".join((text or "").split())
     return t if len(t) <= n else t[: n - 1] + "\u2026"

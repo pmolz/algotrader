@@ -32,8 +32,7 @@ PROMPT_FILE="$REPO/research/PROMPT.md"
 TIMEOUT_S="${RESEARCH_TIMEOUT_S:-2400}"     # 40 min; a search that long has stalled
 MODEL="${RESEARCH_MODEL:-opus}"
 # Scoped so the worst outcome of a bad run is a bad brief, not a bad commit:
-# file writes cannot leave research/briefs, and Bash can only run the format
-# checks.
+# file writes cannot leave research/briefs, and there is no shell at all.
 #
 # Edit(...), not Write(...). File permission rules are matched against Edit
 # only, and an Edit rule covers every file-editing tool including Write. A
@@ -41,7 +40,20 @@ MODEL="${RESEARCH_MODEL:-opus}"
 # no TTY to answer. The first real pass caught this:
 #   "Write(research/briefs/*) is not matched by file permission checks —
 #    only Edit(path) rules are."
-ALLOWED="Read Glob Grep WebSearch WebFetch Edit(research/briefs/*) Bash(.venv/bin/python -m pytest tests/test_research.py*)"
+#
+# No Bash. The first pass also carried a narrow rule for running the format
+# checks, and it never matched whatever pytest invocation was actually
+# attempted. Widening it is the wrong repair: this script runs those same checks
+# below, unconditionally, whether or not the agent thought to. A rule that grants
+# a shell for a job already done elsewhere is blast radius bought for nothing.
+ALLOWED="Read Glob Grep WebSearch WebFetch Edit(research/briefs/*)"
+
+# A dry run only prints what would happen, so it must not be blocked by the
+# preflight below. `install_cron.sh` tells you to run it as a setup check, and a
+# check that refuses whenever last week's briefs are pending review is a check
+# you cannot use at the moment you most want it.
+DRY=0
+[[ "${1:-}" == "--dry-run" ]] && DRY=1
 
 log "=== research_briefs start (repo=$REPO) ==="
 
@@ -58,7 +70,7 @@ fi
 # Refuse to start on top of unreviewed briefs. Otherwise a second week's output
 # lands next to a first week's, `git diff` stops telling you which is which, and
 # the review step quietly becomes guesswork.
-if [[ -n "$(git status --porcelain -- research/briefs 2>/dev/null)" ]]; then
+if [[ $DRY -eq 0 && -n "$(git status --porcelain -- research/briefs 2>/dev/null)" ]]; then
   log "SKIP: research/briefs has uncommitted changes — last run's briefs are"
   log "      still unreviewed. Commit or discard them, then run again."
   exit 2
@@ -67,8 +79,7 @@ fi
 before="$(ls -1 "$BRIEFS_DIR" 2>/dev/null | wc -l)"
 
 # --allowedTools is what makes this unattended: with no TTY, a permission prompt
-# is a hang, not a question. Write is scoped to research/briefs and Bash to the
-# one test command, so the worst case is a bad brief rather than a bad commit.
+# is a hang, not a question. See ALLOWED above for what it grants and why.
 read -r -d '' TASK <<'PROMPT' || true
 Read research/PROMPT.md and carry out the assignment in it exactly. That file is
 authoritative; everything you need is in it.
@@ -78,11 +89,18 @@ Constraints for this unattended run:
 - Do not commit, push, create a branch, or open a PR. Leave your work in the
   working tree for a human to review.
 - Do not run the agent loop, the nightly session, or any backtest.
+- You have no shell. This script runs the brief format checks itself once you
+  are done, so verify what you can by reading and leave the rest to it.
 - When you finish, print a short summary: which briefs you wrote and why, and
   what you discarded on feasibility grounds.
 PROMPT
 
-if [[ "${1:-}" == "--dry-run" ]]; then
+if [[ $DRY -eq 1 ]]; then
+  if [[ -n "$(git status --porcelain -- research/briefs 2>/dev/null)" ]]; then
+    echo "NOTE: research/briefs has uncommitted changes — a real run would SKIP"
+    echo "      until they are reviewed and committed."
+    echo
+  fi
   echo "Would run, in $REPO:"
   echo
   echo "  printf '%s' \"\$TASK\" | timeout ${TIMEOUT_S}s claude -p --model $MODEL \\"

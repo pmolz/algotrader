@@ -67,6 +67,20 @@ was smuggled through as a brief costs a night of compute.
    momentum/trend are always over-supplied; microstructure, seasonality and
    volume/flow usually are not.
 
+   The `family` field must be **exactly one of** these, spelled this way:
+
+   ```
+   mean-reversion   breakout      momentum/trend   volatility
+   volume/flow      microstructure   oscillator    seasonality   other
+   ```
+
+   This is the same vocabulary `algotrader/agent/memory.py` classifies
+   strategies into (`FAMILY_LABELS`). Inventing a near-miss like `volume-flow`
+   is not a harmless spelling difference: the two get cross-referenced, and a
+   family that reads as under-explored on one side and over-supplied on the
+   other is worse than no tally at all. `tests/test_research.py` fails a brief
+   that uses a label outside this set.
+
 ## Honesty rules
 
 - **Cite what you actually read.** Put real references in `sources`. If an idea

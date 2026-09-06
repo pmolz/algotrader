@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from algotrader.agent.memory import ExperimentDB
+from algotrader.agent.memory import FAMILY_LABELS, ExperimentDB
 from algotrader.agent.research import Brief, BriefError, BriefLibrary, parse_brief
 
 GOOD = """---
@@ -166,6 +166,21 @@ def test_shipped_briefs_are_valid():
         assert not b.render().endswith("…"), f"{b.id} is too long for the prompt"
         assert "entry_q" in b.body, f"{b.id} does not pin a starting trade rate"
         assert "rolling" in b.body, f"{b.id} does not specify a rolling threshold"
+
+
+def test_shipped_briefs_use_the_canonical_family_vocabulary():
+    """`family` has to match what memory.py classifies strategies into.
+
+    A near-miss like "volume-flow" for "volume/flow" is not a harmless spelling
+    difference — the two get cross-referenced, and a family that reads as
+    under-explored on one side and over-supplied on the other is worse than no
+    tally at all. The first automated research pass wrote exactly that typo,
+    which is why this is a test and not a note in the prompt.
+    """
+    for b in BriefLibrary("research/briefs").briefs:
+        assert b.family in FAMILY_LABELS, (
+            f"{b.id} declares family {b.family!r}; must be one of {FAMILY_LABELS}"
+        )
 
 
 # -- the loop actually uses them -------------------------------------------------
