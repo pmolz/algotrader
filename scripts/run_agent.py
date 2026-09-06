@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from algotrader.agent import AgentLoop  # noqa: E402
+from algotrader.agent.llm import make_client  # noqa: E402
 from algotrader.config import get, load_config, load_dotenv  # noqa: E402
 from algotrader.data import fetch  # noqa: E402
 
@@ -30,6 +31,9 @@ def main():
                     help="run generated code inside the Docker jail (recommended)")
     ap.add_argument("--no-sandbox", action="store_true",
                     help="force in-process exec (supervised local use only)")
+    ap.add_argument("--ollama-host", default=None, metavar="NAME|URL",
+                    help="Ollama endpoint: a name from agent.hosts, a URL, or "
+                         "'auto' (default: agent.host)")
     args = ap.parse_args()
 
     if args.sandbox:
@@ -39,9 +43,15 @@ def main():
 
     df = fetch(args.symbol, source=args.source, timeframe=args.timeframe,
                cache_dir=get(cfg, "data.cache_dir"),
+               bars=get(cfg, "data.default_bars"),
                exchange=get(cfg, "data.ccxt_exchange", "bitstamp"))
 
-    loop = AgentLoop(df, cfg, symbol=args.symbol, source=args.source,
+    llm = make_client(cfg, host=args.ollama_host, logger=print)
+    if llm is not None and not llm.available():
+        print(f"no LLM endpoint available ({llm.describe()}) — "
+              f"falling back to offline baseline mutation")
+
+    loop = AgentLoop(df, cfg, llm=llm, symbol=args.symbol, source=args.source,
                      timeframe=args.timeframe)
     results = loop.run(args.iterations)
 

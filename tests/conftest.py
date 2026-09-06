@@ -7,6 +7,22 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from algotrader.agent.llm import OllamaClient  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def no_live_ollama(monkeypatch, request):
+    """Keep the suite off the network.
+
+    Endpoint selection probes every configured host, so without this a test run
+    would depend on whether an Ollama server happens to be up on the developer's
+    machine — and would pay the probe timeout on every session construction.
+    Mark a test `live_ollama` to talk to a real server.
+    """
+    if request.node.get_closest_marker("live_ollama"):
+        return
+    monkeypatch.setattr(OllamaClient, "available", lambda self: False)
+
 
 @pytest.fixture
 def trending_ohlcv():

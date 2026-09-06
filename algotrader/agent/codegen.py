@@ -12,6 +12,7 @@ algotrader/live/safety.py. Do not point this at an unattended machine with secre
 from __future__ import annotations
 
 import re
+import types
 from typing import Type
 
 import numpy as np
@@ -19,8 +20,11 @@ import pandas as pd
 
 from ..strategies.base import Strategy, StrategyResult
 
-CODE_BLOCK_RE = re.compile(r"```python\s*(.*?)```", re.DOTALL)
-HYPOTHESIS_RE = re.compile(r"HYPOTHESIS:\s*(.*)", re.IGNORECASE)
+CODE_BLOCK_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.DOTALL)
+# Capture everything after the label up to the code fence: the prompt asks for a
+# mechanism *and* a falsification test, which is two sentences on two lines, and
+# a single-line capture silently kept only the first.
+HYPOTHESIS_RE = re.compile(r"HYPOTHESIS:\s*(.*?)(?=```|\Z)", re.IGNORECASE | re.DOTALL)
 
 # crude denylist to catch obviously dangerous generated code before exec
 FORBIDDEN = ["import os", "import sys", "subprocess", "open(", "__import__",
@@ -29,14 +33,28 @@ FORBIDDEN = ["import os", "import sys", "subprocess", "open(", "__import__",
 
 
 def parse_response(text: str) -> tuple[str, str]:
-    """Extract (hypothesis, code) from the LLM response."""
+    """Extract (hypothesis, code) from the LLM response.
+
+    The hypothesis is not decoration: it is what `lessons_context` feeds back
+    into every later proposal, so a dropped one costs the loop its memory of why
+    an idea was tried. Models emit the label inconsistently — roughly two thirds
+    of the time in practice — so fall back to whatever prose precedes the code
+    block before giving up.
+    """
     m = CODE_BLOCK_RE.search(text)
     if not m:
         raise ValueError("No ```python code block found in LLM response.")
     code = m.group(1).strip()
+
     hm = HYPOTHESIS_RE.search(text)
-    hypothesis = hm.group(1).strip() if hm else "(no hypothesis provided)"
-    return hypothesis, code
+    hypothesis = hm.group(1).strip() if hm else ""
+    if not hypothesis:
+        # Unlabelled prose before the fence is still the model explaining itself.
+        preamble = text[: m.start()].strip()
+        preamble = re.sub(r"^#+\s*", "", preamble, flags=re.MULTILINE).strip()
+        hypothesis = preamble
+    hypothesis = " ".join(hypothesis.split())
+    return (hypothesis or "(no hypothesis provided)"), code
 
 
 def _screen(code: str) -> None:
@@ -46,16 +64,29 @@ def _screen(code: str) -> None:
             raise ValueError(f"Refusing to exec generated code containing {bad!r}")
 
 
-# generated code may only import from this whitelist (models often add imports
-# despite instructions). Everything else raises ImportError.
-_ALLOWED_IMPORTS = {"pandas", "numpy", "math", "pandas as pd", "numpy as np"}
+# Generated code may only import from this whitelist (models add imports despite
+# instructions). Everything else raises ImportError.
+_ALLOWED_ROOTS = {"pandas", "numpy", "math"}
+
+# Names the framework injects into the namespace. Models habitually import them
+# anyway — `from strategy import Strategy` and friends were 31 of 41 codegen
+# failures in the experiment log, a quarter of all iterations thrown away over a
+# redundant import line. The names being asked for are exactly the objects
+# already in scope, so satisfy the request instead of rejecting the candidate.
+_FRAMEWORK_EXPORTS = {"Strategy": Strategy, "StrategyResult": StrategyResult}
 
 
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     root = name.split(".")[0]
-    if root not in {"pandas", "numpy", "math"}:
-        raise ImportError(f"Import of {name!r} not allowed in generated strategy.")
-    return __import__(name, globals, locals, fromlist, level)
+    if root in _ALLOWED_ROOTS:
+        return __import__(name, globals, locals, fromlist, level)
+    # `from <anything> import Strategy [, StrategyResult]` -> hand back the real
+    # classes. Nothing is actually imported and no other name resolves this way,
+    # so the sandbox surface is unchanged: a module that isn't whitelisted still
+    # cannot be reached, it just can't be used to smuggle a name in either.
+    if fromlist and set(fromlist) <= set(_FRAMEWORK_EXPORTS):
+        return types.SimpleNamespace(**_FRAMEWORK_EXPORTS)
+    raise ImportError(f"Import of {name!r} not allowed in generated strategy.")
 
 
 def load_strategy_class(code: str) -> Type[Strategy]:

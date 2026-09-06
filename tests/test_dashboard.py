@@ -285,3 +285,38 @@ def test_equity_uses_the_cache_on_a_second_request(seeded, monkeypatch, tmp_path
     assert first.status_code == 200 and second.status_code == 200
     assert calls == ["equity"], "second request should have been served from cache"
     assert second.get_json()["cached"] is True
+
+
+# -- model host card ----------------------------------------------------------
+def test_api_hosts_is_served_and_shaped(monkeypatch, tmp_path):
+    from algotrader.dashboard import hoststatus
+    from algotrader.dashboard.app import create_app
+    from algotrader.config import load_config
+
+    cfg = load_config()
+    cfg["experiments"]["db_path"] = str(tmp_path / "e.db")
+    ExperimentDB(cfg["experiments"]["db_path"])
+    monkeypatch.setattr(hoststatus, "collect", lambda c, force=False: {
+        "hosts": [{"name": "laptop", "state": "up", "gpu": {"temp_c": 71.0}}],
+        "selected": "laptop", "policy": "auto", "error": None, "checked_at": 0,
+    })
+    r = create_app(cfg).test_client().get("/api/hosts")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["enabled"] is True and body["selected"] == "laptop"
+
+
+def test_host_monitor_can_be_switched_off(tmp_path):
+    """It makes outbound SSH connections; anyone binding off loopback needs an
+    off switch."""
+    from algotrader.dashboard.app import create_app
+    from algotrader.config import load_config
+
+    cfg = load_config()
+    cfg["experiments"]["db_path"] = str(tmp_path / "e.db")
+    ExperimentDB(cfg["experiments"]["db_path"])
+    cfg["dashboard"]["host_monitor"] = False
+    client = create_app(cfg).test_client()
+
+    assert client.get("/api/hosts").get_json() == {"enabled": False, "hosts": []}
+    assert 'id="hosts-card"' not in client.get("/").get_data(as_text=True)

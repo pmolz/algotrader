@@ -3,7 +3,11 @@
 data:
   cache_dir: data_cache
   default_source: ccxt        # ccxt | yfinance
-  default_timeframe: 1d
+  default_timeframe: 15m
+  # Total bars to assemble when fetching (ccxt pages backwards to reach it).
+  # 70080 x 15m is two years; venues cap a single request near 1000. Low trade
+  # rates are forced by costs, so statistical power has to come from history.
+  default_bars: 70080
   # Public OHLCV venue for the ccxt source. Binance blocks some regions; bitstamp
   # and kraken serve public daily history without a key from anywhere.
   ccxt_exchange: bitstamp
@@ -23,7 +27,20 @@ validation:
   # Cost sensitivity: re-run at these multiples of modelled cost. Edge must survive.
   cost_stress_multipliers: [1.0, 1.5, 2.0]
   # Minimum bars required to accept a strategy result as meaningful.
-  min_trades: 30
+  # Intraday needs far more trades before a Sharpe means anything, and a year
+  # of 15m bars supplies them.
+  min_trades: 60
+  # Measured: cost drag alone produces an annualised Sharpe of about -5 at
+  # 0.4 trades/day, -12 at 2/day and -17 at 4/day. Every one of the 94 candidates
+  # that reached walk-forward scored between -2 and -33, which is that drag and
+  # not the ideas. Above ~1.5 trades/day min_sharpe is unreachable by
+  # arithmetic, so searching there is wasted budget.
+  # Keep this consistent with min_trades: at 729 days, 60 trades is 0.08/day.
+  max_trades_per_day: 1.5
+  # Share of exits where stop and target sat inside the same bar and the
+  # stop-wins-ties rule decided the outcome. Above this the P&L is an
+  # assumption rather than a measurement.
+  max_ambiguous_exit_frac: 0.25
   # Promotion thresholds (must pass ALL to advance to paper trading).
   min_sharpe: 1.0
   min_deflated_sharpe: 0.0   # deflated Sharpe > 0 => edge likely survives multiple testing
@@ -40,26 +57,73 @@ agent:
   # far more often (measured: qwen3.5:9b produced 3 unusable strategies out of 4).
   # Step up to qwen2.5-coder:14b if the machine has the headroom.
   model: qwen2.5-coder:7b
+
+  # Which Ollama server to talk to: "auto", a name from `hosts`, or a bare URL.
+  # $OLLAMA_HOST and --ollama-host override this. "auto" walks host_preference
+  # and takes the first endpoint that answers AND has the model pulled; naming
+  # one pins it (a pinned host that is down means offline fallback, not a
+  # silent move to another machine).
+  host: auto
+  # Preference order for "auto". Names not defined in `hosts` are skipped, so
+  # this can mention a laptop you haven't set up yet.
+  host_preference: [laptop, local]
+  hosts:
+    local: http://127.0.0.1:11434
+    # Add the networked box in config/local.yaml, e.g.
+    #   agent:
+    #     hosts:
+    #       laptop: {url: http://192.168.1.42:11434, model: qwen2.5-coder:7b}
+    # The mapping form lets a smaller-VRAM machine serve a smaller model.
+
+  # Generation budget. A partially-offloaded 14B over the LAN can take minutes
+  # per candidate; a timeout here costs a whole iteration.
+  request_timeout_s: 900
+  # How long to wait when testing whether an endpoint is alive.
+  probe_timeout_s: 3
+
   max_iterations: 10
+  # LLM-assisted repair attempts per candidate, for codegen *and* runtime
+  # failures. 0 disables retrying.
+  max_fix_attempts: 2
   # Number of past experiments (worst + best) fed back as "lessons learned".
   memory_context_n: 8
   # Run untrusted generated code inside a Docker jail (Phase 2). Strongly
   # recommended before any unattended/overnight runs. Requires: bash sandbox/build.sh
   use_sandbox: false
 
+research:
+  # External research briefs: ideas written by a wider-reading model for the
+  # local coder model to implement. See docs/RESEARCH.md.
+  # Off means the agent invents every idea itself, as it did before briefs.
+  enabled: true
+  briefs_dir: research/briefs
+  # Attempts a single brief gets (per symbol) before it is retired from the
+  # rotation. Sizing this is really the question "what share of a night should
+  # be researched ideas rather than invented ones", and it depends on
+  # throughput: measured at 0.58 min/candidate (412 candidates in 240 min on
+  # qwen2.5-coder:7b), an 8h session is ~800 candidates. With 3 briefs and 2
+  # symbols, 25 attempts each fills ~150 of them, about a fifth of the night.
+  # Sampling is temperature 0.7 with no fixed seed, so repeats are different
+  # implementations of one idea rather than retries of the same code — the
+  # codegen repair loop handles actual retries under agent.max_fix_attempts.
+  max_attempts_per_brief: 25
+  # Characters of brief text allowed into the prompt. It competes for a 7B
+  # model's attention with the lessons block and the worked example, so a brief
+  # that runs long displaces context rather than adding to it.
+  max_chars: 2500
+
 nightly:
   # Markets the unattended session rotates through, one iteration each in turn.
   # Either a plain symbol (uses data.default_source/timeframe) or a mapping.
+  # Crypto intraday. Equities are out: no 24/7 tape, and yfinance intraday
+  # history is too short to walk forward across.
   symbols:
     - symbol: BTC/USD
       source: ccxt
-      timeframe: 1d
+      timeframe: 15m
     - symbol: ETH/USD
       source: ccxt
-      timeframe: 1d
-    - symbol: SPY
-      source: yfinance
-      timeframe: 1d
+      timeframe: 15m
   # Wall-clock budget. The session refuses to start an iteration it can't finish.
   max_hours: 8.0
   # Optional hard cap on iterations (null = only the clock stops it).
@@ -79,6 +143,13 @@ dashboard:
   # Equity curves are re-run in the sandbox and cached by (code, data, costs).
   cache_dir: experiments/equity_cache
   equity_timeout_s: 60
+  # Show a live status card for the machines in agent.hosts: reachable, model
+  # resident, and GPU load/temp where the host declares a `gpu` source. GPU
+  # numbers for a remote box come from `nvidia-smi` over SSH, so that host needs
+  # key-based SSH from here. Turn this off if you bind the dashboard off
+  # loopback — it is read-only, but it does make outbound SSH connections.
+  host_monitor: true
+
   # Let the dashboard start/stop agent sessions and toggle the nightly schedule.
   # These are the only endpoints with side effects. Set false to make the whole
   # app strictly read-only (recommended if you ever bind it off loopback).

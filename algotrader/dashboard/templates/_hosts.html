@@ -1,0 +1,9 @@
+{# Which machine is serving the model, and what its GPU is doing.
+   Rendered empty and filled from /api/hosts. Under `host: auto` a laptop that
+   drops off the network fails nothing — the run just moves to the fallback and
+   the night looks normal — so the only warning you get is this dot. #}
+<div class="card hosts" id="hosts-card" hidden>
+  <h2>Model hosts</h2>
+  <p class="sub" id="hosts-sub">Checking…</p>
+  <div id="hosts-list"></div>
+</div>

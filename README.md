@@ -15,8 +15,10 @@ its own failures* over time.
 ## Architecture
 
 ```
-Orchestrator (agent loop)
-  1. Propose hypothesis        (LLM)
+Research briefs (Claude, weekly)  ->  research/briefs/*.md
+                                            |
+Orchestrator (agent loop)                   v
+  1. Propose hypothesis        (LLM, implementing a brief if one is available)
   2. Generate strategy code    (LLM -> sandbox)
   3. Backtest                  (vectorized engine)
   4. Validation gauntlet       (walk-forward, OOS, costs, multiple-testing)
@@ -36,6 +38,7 @@ Package layout:
 | `algotrader/validation` | Walk-forward, out-of-sample, cost sensitivity, deflated Sharpe |
 | `algotrader/sentiment`  | Free sentiment sources (Reddit, GDELT, Fear & Greed) |
 | `algotrader/agent`      | LLM loop: propose -> code -> evaluate -> reflect |
+| `algotrader/agent/research.py` | External research briefs: the idea supply the local model codes from |
 | `algotrader/live`       | Paper/live trading adapters (Alpaca paper first) |
 | `algotrader/agent/nightly.py` | Unattended overnight session (budgets, locking, reflection) |
 | `algotrader/agent/report.py`  | Morning report generator |
@@ -49,14 +52,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-# 1. pull and cache some data
-python scripts/fetch_data.py --symbol BTC/USD --source ccxt --timeframe 1d
+# 1. pull and cache some data (a year of 15m bars, paged from the exchange)
+python scripts/fetch_data.py --symbol BTC/USD --source ccxt --timeframe 15m
 
 # 2. run the built-in baseline strategies through the gauntlet
 python scripts/run_backtest.py --strategy sma_crossover --symbol BTC/USD
 
 # 3. run the agent loop
-python scripts/run_agent.py --symbol BTC/USD --iterations 5 --sandbox
+python scripts/run_agent.py --symbol BTC/USD --timeframe 15m --iterations 5 --sandbox
 
 # 4. hand it the night, read the report over coffee
 bash sandbox/build.sh
@@ -66,6 +69,55 @@ bash scripts/install_cron.sh                                   # dry run first
 
 > `data.ccxt_exchange` defaults to `bitstamp`, not Binance — Binance refuses
 > public OHLCV requests from some regions. Any ccxt venue works.
+
+## Intraday crypto, and why costs are the whole problem
+
+The default target is **BTC/USD and ETH/USD on 15-minute bars**, one year of
+history (35,040 bars, paged from the exchange 1000 at a time).
+
+At that timeframe transaction costs dominate everything else. A round trip pays
+fees plus slippage twice — about **0.30%** at the configured rates — so:
+
+| trades/day | round trips/yr | cost drag |
+|-----------:|---------------:|----------:|
+| 1 | 365 | ~110% of capital |
+| 3 | 1,095 | ~330% |
+| 10 | 3,650 | ~1,100% |
+
+A strategy must average more than 0.30% *per trade* before anything is left
+over. This is not a tuning detail, it is the constraint the whole search runs
+inside, so the gauntlet checks it **before** the expensive validation and
+rejects anything above `validation.max_trades_per_day`. The failure messages
+distinguish "traded too often to survive costs", "never traded at all", and
+"traded sensibly and lost money" — three different problems that need three
+different fixes, and all three end up in the agent's memory.
+
+### Stop loss and take profit
+
+Strategies may declare a risk overlay:
+
+```python
+return StrategyResult(
+    positions=entries.astype(float),
+    stop_loss_pct=atr_frac * 1.5,     # float, or a Series for volatility sizing
+    take_profit_pct=atr_frac * 3.0,
+)
+```
+
+When either is set the engine stops doing close-to-close arithmetic and walks
+each bar's path. The fill rules are chosen so a backtest cannot flatter itself:
+
+- **If a bar could have hit both your stop and your target, the stop is
+  assumed.** OHLC cannot say which came first, and guessing the target is how a
+  backtest invents an edge. `ambiguous_exit_frac` counts how often that
+  assumption was load-bearing, and a candidate leaning on it too heavily is
+  rejected as unmeasurable rather than accepted as profitable.
+- **A bar that gaps through a level fills at the open**, not at the level.
+- **No immediate re-entry** after a stop: the signal must go flat and fire
+  again, or the stop is just a fee generator.
+
+Shorting is off. Perp funding and borrow costs aren't modelled, and leaving
+them out would flatter every short strategy.
 
 ## Overnight loop + morning report
 
@@ -128,13 +180,98 @@ agent:
   model: qwen2.5-coder:7b   # or qwen3.5:9b, etc.
 ```
 
+### Choosing which machine serves the model
+
+The model can live on this box, on another machine on the LAN, or both. Name the
+endpoints under `agent.hosts` and pick one with `agent.host`:
+
+```yaml
+agent:
+  host: auto                        # "auto" | a name from hosts | a bare URL
+  host_preference: [laptop, local]  # order "auto" tries them in
+  hosts:
+    local: http://127.0.0.1:11434
+    laptop:                         # mapping form: per-endpoint model override
+      url: http://192.168.1.42:11434
+      model: qwen2.5-coder:3b       # a 4GB laptop GPU may only fit a smaller one
+```
+
+Put machine-specific addresses in `config/local.yaml` (gitignored), not in
+`default.yaml`.
+
+```bash
+python scripts/check_llm.py                    # who's up, and who'd get the work
+python scripts/run_agent.py   --ollama-host laptop --symbol BTC/USD --iterations 3
+python scripts/run_nightly.py --ollama-host local
+```
+
+Precedence is `--ollama-host` > `$OLLAMA_HOST` > `agent.host`. The rules:
+
+- **`auto`** walks `host_preference` and takes the first endpoint that answers
+  *and* has the model pulled — a reachable server missing the model is no more
+  use than one that's off.
+- **Naming a host pins it.** If a pinned host is down the session drops to the
+  offline fallback rather than quietly running somewhere else; the run row
+  records which machine generated the strategies, so that claim has to be true.
+- **A host that dies mid-session is failed over on the next iteration** (under
+  `auto`), because losing one candidate is much cheaper than losing eight hours.
+  One that comes back gets picked up again.
+
+A session resolves its endpoint once at startup, logs it, and stores it in
+`runs.host`. If nothing is available it says so loudly — an unnoticed night of
+offline baseline mutation looks like research and isn't.
+
 Notes:
 - Smaller general models (<=3B) tend to emit broken code — expect many retries.
   Use a 7B+ coder model for real work.
 - To use Claude instead: set `provider: anthropic`, `pip install -e ".[agent]"`,
-  and put `ANTHROPIC_API_KEY` in `.env`.
+  and put `ANTHROPIC_API_KEY` in `.env`. Note that a Claude *subscription* seat
+  is not API access — the API bills separately through console.anthropic.com.
 - With no working provider, the loop falls back to mutating baselines so you can
   still exercise the whole pipeline offline.
+
+## Research briefs — Claude thinks, the local model codes
+
+The local 7B is good at turning a specified idea into contract-correct Python
+and bad at inventing ideas: left alone it converges on the same few textbook
+mechanisms. So the idea supply is split off from the coding.
+
+```
+Claude (weekly, scheduled)          local 7B (nightly)
+  search -> feasibility gate  --->    brief -> contract-correct Python
+  -> research/briefs/*.md             -> gauntlet -> experiment log
+```
+
+A **brief** is a short, sectioned assignment: the mechanism, the ranked score as
+a pandas expression, a starting `entry_q`, ATR multiples, parameter defaults,
+and the pitfalls. The 7B supplies the class name, the contract boilerplate, the
+hold pattern and the risk wiring — the parts it is actually good at.
+
+```bash
+ls research/briefs/                 # three hand-written seeds ship with the repo
+cat research/PROMPT.md              # the standing assignment for the researcher
+bash scripts/research_briefs.sh     # one research pass (cron runs this Sundays)
+git diff -- research/briefs         # review what it wrote, commit what you like
+python scripts/run_agent.py --symbol BTC/USD --iterations 3   # picks briefs up automatically
+```
+
+The research pass runs `claude -p` headless from cron, writes briefs, and
+**stops** — no commit, no PR. The review is the part that stays human.
+
+The loop rotates through the library least-attempted-first, retires a brief
+after `research.max_attempts_per_brief` tries, and goes back to inventing its
+own ideas when the library is exhausted or absent. At the measured 0.58 min per
+candidate an 8-hour session runs ~800 of them, so that cap is what decides how
+much of a night is researched ideas rather than invented ones. Every candidate records
+`experiments.researched_from`, so you can later check whether researched ideas
+actually cleared more gauntlet stages than self-generated ones.
+
+The gauntlet does not know where a candidate came from. A brief buys an idea a
+place in the queue and nothing else — and since every candidate raises `n_trials`
+and the deflated-Sharpe bar for everything else, the supply is deliberately two
+or three briefs a week rather than a firehose.
+
+Full details, the format, and the feasibility gate: **[docs/RESEARCH.md](docs/RESEARCH.md)**.
 
 ## Development phases (see ROADMAP.md)
 
