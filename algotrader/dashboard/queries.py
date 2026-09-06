@@ -23,6 +23,11 @@ from ..agent.report import fail_stage
 UNJUDGED_STAGES = ("codegen", "strategy runtime", "crash", "sandbox setup", "unknown")
 
 
+def _has_column(conn, table: str, column: str) -> bool:
+    return any(r["name"] == column
+               for r in conn.execute(f"PRAGMA table_info({table})"))
+
+
 def _row(r) -> dict[str, Any]:
     # .keys() is required: iterating a sqlite3.Row yields values, not column names
     return {k: r[k] for k in r.keys()}  # noqa: SIM118
@@ -50,6 +55,11 @@ def _experiment(r) -> dict[str, Any]:
         "error": r["error"],
         # likewise: `in r` would search the row's *values*, not its column names
         "run_id": r["run_id"] if "run_id" in r.keys() else None,  # noqa: SIM118
+        # Absent on a log written before briefs existed; the dashboard is
+        # read-only and cannot add the column, so it renders as "self-generated".
+        "researched_from": (
+            r["researched_from"] if "researched_from" in r.keys() else None  # noqa: SIM118
+        ),
     }
     exp["stage"] = fail_stage(exp)
     exp["sharpe"] = _sharpe_signal(exp)
@@ -233,3 +243,47 @@ def cost_stress(exp: dict) -> list[dict]:
     except ValueError:
         items = sorted(cs.items())
     return [{"multiplier": k, "sharpe": float(v)} for k, v in items]
+
+
+def brief_outcomes(conn) -> dict[str, dict[str, Any]]:
+    """Per research brief: what the candidates it produced actually did.
+
+    This is the question the briefs page exists to answer. A brief is a claim
+    that an idea is worth the loop's time, and the only honest way to judge one
+    is by how far its candidates got — not by how well it reads.
+
+    Keyed by brief id. Briefs that have never been coded are absent, which the
+    caller renders as "not tried yet" rather than as a zero.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    # The dashboard opens the log read-only and so cannot run the migration that
+    # adds this column. A log written before briefs existed is a normal thing to
+    # be pointed at, and it should render an empty briefs page rather than a 500.
+    if not _has_column(conn, "experiments", "researched_from"):
+        return out
+    rows = conn.execute(
+        "SELECT * FROM experiments WHERE researched_from IS NOT NULL ORDER BY id"
+    ).fetchall()
+    for r in rows:
+        e = _experiment(r)
+        bid = r["researched_from"]
+        o = out.setdefault(bid, {
+            "attempts": 0, "promoted": 0, "by_symbol": {}, "stages": {},
+            "best_sharpe": None, "last_id": None, "last_at": None,
+        })
+        o["attempts"] += 1
+        o["promoted"] += int(e["promoted"])
+        o["by_symbol"][e["symbol"]] = o["by_symbol"].get(e["symbol"], 0) + 1
+        o["stages"][e["stage"]] = o["stages"].get(e["stage"], 0) + 1
+        o["last_id"], o["last_at"] = e["id"], e["created_at"]
+        if e["sharpe"] is not None and (o["best_sharpe"] is None
+                                        or e["sharpe"] > o["best_sharpe"]):
+            o["best_sharpe"] = e["sharpe"]
+    for o in out.values():
+        # Most common cause of death, which is the actionable summary: an idea
+        # that keeps dying at codegen needs a clearer brief, one that keeps
+        # overtrading needs a different entry_q, and one that reaches
+        # walk-forward and loses is the only kind that was actually tested.
+        o["top_stage"] = max(o["stages"].items(), key=lambda kv: kv[1])[0]
+        o["unjudged"] = sum(n for s, n in o["stages"].items() if s in UNJUDGED_STAGES)
+    return out

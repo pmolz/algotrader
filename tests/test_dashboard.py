@@ -320,3 +320,149 @@ def test_host_monitor_can_be_switched_off(tmp_path):
 
     assert client.get("/api/hosts").get_json() == {"enabled": False, "hosts": []}
     assert 'id="hosts-card"' not in client.get("/").get_data(as_text=True)
+
+
+# -- briefs page -----------------------------------------------------------------
+#
+# The page's job is to answer "is the research pipeline actually feeding the
+# loop", and every failure mode it has to surface is a silent one: a malformed
+# brief the loop skips without complaint, a library that has been used up, a
+# brief whose candidates all die before reaching a verdict. Rendering is the
+# easy half; these tests are about the page not being quietly reassuring.
+
+BRIEF = """---
+id: {id}
+title: {title}
+family: microstructure
+sources: [a paper]
+---
+
+MECHANISM
+Forced sellers overshoot. Rank with a rolling quantile, entry_q 0.97.
+"""
+
+
+@pytest.fixture
+def with_briefs(cfg, tmp_path):
+    d = tmp_path / "briefs"
+    d.mkdir()
+    (d / "a.md").write_text(BRIEF.format(id="alpha-idea", title="Alpha Idea"))
+    (d / "b.md").write_text(BRIEF.format(id="beta-idea", title="Beta Idea"))
+    cfg["research"]["briefs_dir"] = str(d)
+    cfg["research"]["max_attempts_per_brief"] = 2
+    return cfg, d
+
+
+def test_briefs_page_lists_the_library(with_briefs, seeded):
+    cfg, _ = with_briefs
+    client = create_app(cfg).test_client()
+    body = client.get("/briefs").data.decode()
+    assert "Alpha Idea" in body and "Beta Idea" in body
+    assert "Forced sellers overshoot" in body       # the body the model is shown
+    assert "not tried yet" in body                  # no candidates coded yet
+
+
+def test_an_unparseable_brief_is_reported_loudly(with_briefs, seeded):
+    """The failure this page exists for. The loop skips a malformed brief in
+    silence, so a broken library is indistinguishable from a quiet week."""
+    cfg, d = with_briefs
+    (d / "broken.md").write_text("this is not a brief")
+    body = create_app(cfg).test_client().get("/briefs").data.decode()
+    assert "not reaching the model" in body
+    assert "broken.md" in body
+
+
+def test_outcomes_come_from_the_log(with_briefs, cfg):
+    cfg, _ = with_briefs
+    db = ExperimentDB(cfg["experiments"]["db_path"])
+    for reasons, promoted in ((["FAIL codegen"], False),
+                              (["FAIL walk-forward: mean OOS Sharpe 0.30 < 1.0"], False)):
+        db.record(symbol="BTC/USD", source="ccxt", timeframe="1d",
+                  strategy_name="s", hypothesis="h", params={}, code="x",
+                  promoted=promoted, metrics={}, gauntlet_checks={},
+                  reasons=reasons, researched_from="alpha-idea")
+    db.close()
+
+    client = create_app(cfg).test_client()
+    body = client.get("/briefs?b=alpha-idea").data.decode()
+
+    # The stage breakdown is per-brief, so it is what proves the outcomes are
+    # this brief's and not the log's in aggregate.
+    assert "Where its candidates died" in body
+    assert "codegen" in body and "walk-forward" in body
+    # One of the two never reached a verdict, and that is the number worth
+    # acting on: a brief whose candidates cannot compile is a brief problem,
+    # not an idea problem.
+    assert "Never judged" in body
+
+    conn = sqlite3.connect(cfg["experiments"]["db_path"])
+    conn.row_factory = sqlite3.Row
+    o = queries.brief_outcomes(conn)["alpha-idea"]
+    conn.close()
+    assert o["attempts"] == 2 and o["unjudged"] == 1 and o["promoted"] == 0
+
+
+def test_a_used_up_brief_is_not_shown_as_in_rotation(with_briefs, cfg):
+    cfg, _ = with_briefs                       # max_attempts_per_brief = 2
+    db = ExperimentDB(cfg["experiments"]["db_path"])
+    for _ in range(2):
+        db.record(symbol="BTC/USD", source="ccxt", timeframe="1d", strategy_name="s",
+                  hypothesis="h", params={}, code="x", promoted=False, metrics={},
+                  gauntlet_checks={}, reasons=["FAIL codegen"],
+                  researched_from="alpha-idea")
+    db.close()
+    body = create_app(cfg).test_client().get("/briefs").data.decode()
+    assert "used up" in body
+
+
+def test_retired_briefs_stay_visible(with_briefs, seeded):
+    """The rotation drops them; the page must not, or a brief taken out of
+    service just vanishes with no record that it existed."""
+    cfg, d = with_briefs
+    (d / "a.md").write_text(
+        BRIEF.format(id="alpha-idea", title="Alpha Idea").replace(
+            "sources: [a paper]", "sources: [a paper]\nretired: true")
+    )
+    body = create_app(cfg).test_client().get("/briefs").data.decode()
+    assert "Alpha Idea" in body
+    assert "retired" in body
+
+
+def test_disabled_research_says_so(with_briefs, seeded):
+    cfg, _ = with_briefs
+    cfg["research"]["enabled"] = False
+    body = create_app(cfg).test_client().get("/briefs").data.decode()
+    assert "switched off" in body
+
+
+def test_empty_library_is_not_an_error(cfg, tmp_path, seeded):
+    cfg["research"]["briefs_dir"] = str(tmp_path / "does-not-exist")
+    r = create_app(cfg).test_client().get("/briefs")
+    assert r.status_code == 200
+    assert "No briefs in" in r.data.decode()
+
+
+def test_a_log_without_the_provenance_column_still_renders(with_briefs, seeded):
+    """The dashboard opens the log read-only and cannot migrate it. Pointing it
+    at a DB written before briefs existed must render, not 500."""
+    cfg, _ = with_briefs
+    conn = sqlite3.connect(cfg["experiments"]["db_path"])
+    conn.execute("ALTER TABLE experiments DROP COLUMN researched_from")
+    conn.commit()
+    conn.close()
+
+    client = create_app(cfg).test_client()
+    assert client.get("/briefs").status_code == 200
+    assert client.get("/experiments").status_code == 200
+
+
+def test_a_candidate_links_back_to_its_brief(with_briefs, cfg):
+    cfg, _ = with_briefs
+    db = ExperimentDB(cfg["experiments"]["db_path"])
+    exp_id = db.record(symbol="BTC/USD", source="ccxt", timeframe="1d",
+                       strategy_name="s", hypothesis="h", params={}, code="x",
+                       promoted=False, metrics={}, gauntlet_checks={},
+                       reasons=["FAIL codegen"], researched_from="alpha-idea")
+    db.close()
+    body = create_app(cfg).test_client().get(f"/experiment/{exp_id}").data.decode()
+    assert "/briefs?b=alpha-idea" in body

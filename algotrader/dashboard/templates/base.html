@@ -20,6 +20,7 @@
     <a href="/?{{ qs }}" class="{{ 'active' if request.path == '/' }}">Overview</a>
     <a href="/experiments?{{ qs }}" class="{{ 'active' if request.path.startswith('/experiment') }}">Experiments</a>
     <a href="/runs" class="{{ 'active' if request.path == '/runs' }}">Sessions</a>
+    <a href="/briefs" class="{{ 'active' if request.path == '/briefs' }}">Briefs</a>
     <a href="/reports" class="{{ 'active' if request.path == '/reports' }}">Reports</a>
   </nav>
   <span class="spacer"></span>

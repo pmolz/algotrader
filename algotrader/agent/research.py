@@ -122,6 +122,7 @@ class BriefLibrary:
         self.directory = Path(directory)
         self.max_attempts = max_attempts
         self.briefs: list[Brief] = []
+        self.all_briefs: list[Brief] = []
         # Malformed files are collected rather than raised: one bad brief should
         # not end an unattended session. They are surfaced loudly by the caller,
         # because a research pipeline that has silently stopped supplying ideas
@@ -130,7 +131,10 @@ class BriefLibrary:
         self.load()
 
     def load(self) -> None:
-        self.briefs, self.problems = [], []
+        # `briefs` is the rotation; `all_briefs` also keeps the retired ones, so
+        # the dashboard can show a brief that has been taken out of service
+        # rather than having it silently vanish from the library.
+        self.briefs, self.all_briefs, self.problems = [], [], []
         if not self.directory.is_dir():
             return
         seen: dict[str, Path] = {}
@@ -146,6 +150,7 @@ class BriefLibrary:
                 )
                 continue
             seen[brief.id] = path
+            self.all_briefs.append(brief)
             if not brief.retired:
                 self.briefs.append(brief)
 

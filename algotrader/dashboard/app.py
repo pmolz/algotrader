@@ -28,6 +28,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request
 from flask.json.provider import DefaultJSONProvider
 
+from ..agent.research import BriefLibrary
 from ..config import REPO_ROOT, get, load_config
 from . import control, hoststatus, queries
 from .equity import EquityUnavailable, cached_curve, equity_curve, json_safe
@@ -174,6 +175,60 @@ def create_app(cfg: dict | None = None) -> Flask:
             )
         finally:
             conn.close()
+
+    @app.route("/briefs")
+    def briefs():
+        """The research library, and whether it is actually feeding the loop.
+
+        Deliberately shows the rotation state next to the outcomes. A brief that
+        looks compelling and has produced eight candidates that all died at
+        codegen is not a good brief, and that is only visible with both halves
+        on the same row.
+        """
+        d = get(cfg, "research.briefs_dir", "research/briefs")
+        d = Path(d) if Path(d).is_absolute() else REPO_ROOT / d
+        max_attempts = int(get(cfg, "research.max_attempts_per_brief", 3))
+        lib = BriefLibrary(d, max_attempts=max_attempts)
+
+        conn = db()
+        try:
+            outcomes = queries.brief_outcomes(conn)
+            symbols = queries.symbols(conn)
+        finally:
+            conn.close()
+
+        # Attempts are counted per symbol, so a brief is only out of the
+        # rotation once every symbol has used it up. Showing the max would call
+        # a brief retired while it is still queued for the other market.
+        rows = []
+        for b in lib.all_briefs:
+            o = outcomes.get(b.id)
+            per_symbol = (o or {}).get("by_symbol", {})
+            remaining = {s: max(0, max_attempts - per_symbol.get(s, 0))
+                         for s in symbols} if symbols else {}
+            rows.append({
+                "brief": b,
+                "body": b.render(int(get(cfg, "research.max_chars", 2500))),
+                "outcome": o,
+                "remaining": remaining,
+                "in_rotation": (not b.retired) and (any(remaining.values())
+                                                    if remaining else True),
+            })
+
+        which = request.args.get("b")
+        if which not in {r["brief"].id for r in rows}:
+            which = rows[0]["brief"].id if rows else None
+
+        return render_template(
+            "briefs.html",
+            rows=rows,
+            which=which,
+            problems=lib.problems,
+            enabled=bool(get(cfg, "research.enabled", True)),
+            briefs_dir=str(d),
+            max_attempts=max_attempts,
+            symbols=symbols,
+        )
 
     @app.route("/reports")
     def reports():

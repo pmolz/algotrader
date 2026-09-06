@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Briefs · algotrader{% endblock %}
+{% block filters %}{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h2>Research briefs</h2>
+  <p class="sub">
+    Ideas written by a wider-reading model for the local coder model to implement.
+    Read from <span class="mono">{{ briefs_dir }}</span>, written weekly by
+    <span class="mono">scripts/research_briefs.sh</span>.
+  </p>
+
+  {% if not enabled %}
+    <div class="callout bad">
+      <h3>Briefs are switched off</h3>
+      <p><span class="mono">research.enabled</span> is false, so the loop invents
+         every idea itself and nothing below is reaching it.</p>
+    </div>
+  {% endif %}
+
+  {% if problems %}
+    {# Loud on purpose: a malformed brief is skipped silently by the loop, so a
+       broken library looks exactly like a week with no new ideas. #}
+    <div class="callout bad">
+      <h3>{{ problems|length }} file(s) ignored — these are not reaching the model</h3>
+      {% for p in problems %}<p class="mono">{{ p }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  {% if rows %}
+    <table>
+      <thead><tr>
+        <th>Brief</th><th>Family</th><th>Status</th>
+        <th class="num">Coded</th><th class="num">Best Sharpe</th><th>Usually dies at</th>
+      </tr></thead>
+      <tbody>
+        {% for r in rows %}
+          <tr>
+            <td>
+              <a href="/briefs?b={{ r.brief.id }}">{{ r.brief.title }}</a>
+              <div class="mono muted">{{ r.brief.id }}</div>
+            </td>
+            <td>{{ r.brief.family }}</td>
+            <td>
+              {% if r.brief.retired %}
+                <span class="badge neutral"><span class="dot"></span>retired</span>
+              {% elif r.in_rotation %}
+                <span class="badge good"><span class="dot"></span>in rotation</span>
+              {% else %}
+                <span class="badge neutral"><span class="dot"></span>used up</span>
+              {% endif %}
+            </td>
+            <td class="num">{{ r.outcome.attempts if r.outcome else '—' }}</td>
+            <td class="num">
+              {% if r.outcome %}{{ r.outcome.best_sharpe | num }}{% else %}—{% endif %}
+            </td>
+            <td class="muted">{{ r.outcome.top_stage if r.outcome else 'not tried yet' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">
+      No briefs in <span class="mono">{{ briefs_dir }}</span>.
+      Run <span class="mono">bash scripts/research_briefs.sh</span>, or write one by
+      hand following <span class="mono">research/PROMPT.md</span>.
+    </div>
+  {% endif %}
+</div>
+
+{% for r in rows if r.brief.id == which %}
+  <div class="card">
+    <h2>{{ r.brief.title }}</h2>
+    <p class="sub mono">{{ r.brief.id }} · {{ r.brief.family }}</p>
+
+    <div class="kpis" style="margin-bottom:18px">
+      <div class="tile">
+        <div class="label">Candidates coded</div>
+        <div class="value">{{ r.outcome.attempts if r.outcome else 0 }}</div>
+        <div class="note">
+          {% if r.outcome %}
+            {{ r.outcome.promoted }} promoted
+          {% else %}
+            none yet — the next session picks this up
+          {% endif %}
+        </div>
+      </div>
+      <div class="tile">
+        <div class="label">Never judged</div>
+        {# A brief whose candidates mostly fail to compile is a brief problem,
+           not an idea problem — it is the one number here you can act on. #}
+        <div class="value">{{ r.outcome.unjudged if r.outcome else 0 }}</div>
+        <div class="note">failed before any verdict</div>
+      </div>
+      <div class="tile">
+        <div class="label">Attempts left</div>
+        <div class="value">
+          {% if r.remaining %}{{ r.remaining.values() | sum }}{% else %}—{% endif %}
+        </div>
+        <div class="note">
+          {{ max_attempts }} per symbol
+          {%- if r.remaining %} ·
+            {% for s, n in r.remaining.items() %}{{ s }}: {{ n }}{{ ', ' if not loop.last }}{% endfor %}
+          {% endif %}
+        </div>
+      </div>
+      <div class="tile">
+        <div class="label">Best Sharpe</div>
+        <div class="value">{% if r.outcome %}{{ r.outcome.best_sharpe | num }}{% else %}—{% endif %}</div>
+        <div class="note">
+          {% if r.outcome and r.outcome.last_id %}
+            last: <a href="/experiment/{{ r.outcome.last_id }}">#{{ r.outcome.last_id }}</a>
+          {% else %}no candidates yet{% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if r.outcome and r.outcome.stages %}
+      <h3>Where its candidates died</h3>
+      <table>
+        <thead><tr><th>Stage</th><th class="num">Candidates</th></tr></thead>
+        <tbody>
+          {% for stage, n in r.outcome.stages | dictsort(by='value', reverse=true) %}
+            <tr><td>{{ stage }}</td><td class="num">{{ n }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    {% if r.brief.sources %}
+      <h3>Sources</h3>
+      {# Plain text, never anchors: a brief is model-written, and linking its
+         citations would make an invented URL a one-click navigation target. #}
+      {% for s in r.brief.sources %}<p class="muted">{{ s }}</p>{% endfor %}
+    {% endif %}
+
+    <h3>What the model is told</h3>
+    <p class="sub">Exactly this text, clipped to
+       <span class="mono">research.max_chars</span> ({{ r.body | length }} chars),
+       is pasted into the propose prompt.</p>
+    {# Preformatted, like the reports view: model-influenced content does not go
+       through an HTML renderer. #}
+    <pre class="code">{{ r.body }}</pre>
+  </div>
+{% endfor %}
+{% endblock %}

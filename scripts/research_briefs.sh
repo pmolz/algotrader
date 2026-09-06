@@ -32,8 +32,16 @@ PROMPT_FILE="$REPO/research/PROMPT.md"
 TIMEOUT_S="${RESEARCH_TIMEOUT_S:-2400}"     # 40 min; a search that long has stalled
 MODEL="${RESEARCH_MODEL:-opus}"
 # Scoped so the worst outcome of a bad run is a bad brief, not a bad commit:
-# Write cannot leave research/briefs, and Bash can only run the format checks.
-ALLOWED="Read Glob Grep WebSearch WebFetch Write(research/briefs/*) Bash(.venv/bin/python -m pytest tests/test_research.py*)"
+# file writes cannot leave research/briefs, and Bash can only run the format
+# checks.
+#
+# Edit(...), not Write(...). File permission rules are matched against Edit
+# only, and an Edit rule covers every file-editing tool including Write. A
+# Write(...) rule silently matches nothing, so the run reaches a prompt it has
+# no TTY to answer. The first real pass caught this:
+#   "Write(research/briefs/*) is not matched by file permission checks —
+#    only Edit(path) rules are."
+ALLOWED="Read Glob Grep WebSearch WebFetch Edit(research/briefs/*) Bash(.venv/bin/python -m pytest tests/test_research.py*)"
 
 log "=== research_briefs start (repo=$REPO) ==="
 

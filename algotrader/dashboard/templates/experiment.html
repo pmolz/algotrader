@@ -17,6 +17,11 @@
     {{ exp.symbol }} · {{ exp.timeframe }} · {{ exp.source }} ·
     {{ exp.created_at | ts }}
     {% if exp.run_id %} · session <a href="/runs">#{{ exp.run_id }}</a>{% endif %}
+    {# Provenance. Absent means the model invented this one itself, which is the
+       normal case and not worth a label of its own. #}
+    {% if exp.researched_from %}
+      · from brief <a href="/briefs?b={{ exp.researched_from }}" class="mono">{{ exp.researched_from }}</a>
+    {% endif %}
   </p>
   <p class="hypothesis">{{ exp.hypothesis or "(no hypothesis recorded)" }}</p>
   {% if exp.params %}
