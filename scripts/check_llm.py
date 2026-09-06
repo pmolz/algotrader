@@ -48,8 +48,13 @@ def main() -> int:
     probe_timeout = int(get(cfg, "agent.probe_timeout_s", 3))
 
     print(f"policy:   {policy}\n")
+    # A pinned URL that is not in agent.hosts is a legitimate endpoint (that is
+    # what "adhoc" means), but it is absent from `endpoints` — so probing only
+    # the configured list reported "no usable endpoint" for a host that was up
+    # and about to be used. Probe the candidates too.
+    known = {e.url for e in endpoints}
     rows = []
-    for e in endpoints:
+    for e in [*endpoints, *(c for c in candidates if c.url not in known)]:
         client = OllamaClient(e.model, host=e.url, probe_timeout=probe_timeout,
                               name=e.name)
         # available() is reachable AND has the model — a server missing the

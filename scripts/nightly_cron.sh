@@ -11,7 +11,12 @@ cd "$REPO" || exit 1
 
 # cron's PATH is typically just /usr/bin:/bin; docker and ollama need more.
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-export OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
+# Deliberately NOT defaulted. llm.py gives $OLLAMA_HOST precedence over
+# agent.host, so setting it here pinned every unattended session to this box and
+# disabled the failover that agent.host_preference exists to provide — the
+# networked GPU was never once asked to do the work. It is still honoured when
+# the caller sets it on purpose, which is the documented override.
+
 # Keep BLAS from oversubscribing every core on a machine you may still be using.
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-2}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-2}"
@@ -38,9 +43,34 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
-# Warm the local model so the first iteration isn't billed for the cold load.
-if [[ "$(${PY} -c 'import sys;sys.path.insert(0,"'"$REPO"'");from algotrader.config import get,load_config;print(get(load_config(),"agent.provider"))' 2>/dev/null)" == "ollama" ]]; then
-  curl -sf "$OLLAMA_HOST/api/tags" >/dev/null 2>&1 || log "WARN: Ollama not responding at $OLLAMA_HOST"
+# Warm the model so the first iteration isn't billed for the cold load — on
+# whichever endpoint the session will ACTUALLY choose. Asking the app rather
+# than assuming localhost is the point: a warm-up that hits the wrong box is
+# worse than none, because it reports healthy while the real endpoint is cold.
+WARM="$(${PY} - <<PYWARM 2>/dev/null
+import sys
+sys.path.insert(0, "$REPO")
+from algotrader.config import get, load_config
+from algotrader.agent.llm import parse_endpoints, select_candidates
+cfg = load_config()
+if (get(cfg, "agent.provider") or "").lower() == "ollama":
+    try:
+        candidates, _ = select_candidates(cfg, parse_endpoints(cfg))
+    except ValueError:
+        candidates = []
+    for e in candidates:
+        print(f"{e.name}\t{e.url}")
+PYWARM
+)"
+if [[ -n "$WARM" ]]; then
+  while IFS=$'\t' read -r name url; do
+    [[ -z "$url" ]] && continue
+    if curl -sf -m 5 "$url/api/tags" >/dev/null 2>&1; then
+      log "warmed $name ($url)"
+      break
+    fi
+    log "WARN: Ollama not responding at $name ($url)"
+  done <<<"$WARM"
 fi
 
 "$PY" scripts/run_nightly.py "$@" >>"$CRON_LOG" 2>&1
