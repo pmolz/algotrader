@@ -92,8 +92,17 @@ cloud agent, opens a PR against `research/briefs/`, and never runs the agent
 loop or touches the default branch. Manage it with `/schedule` in Claude Code.
 
 Two or three briefs a week, deliberately. Every candidate coded raises
-`n_trials` and therefore the deflated-Sharpe bar for everything else in the log,
-so an idea firehose makes the whole search harder, not faster.
+`n_trials` and therefore the deflated-Sharpe bar for everything else in the log.
+That cost is real but modest — on a 28k-bar dev set the bar for DSR > 0.5 moves
+from an annualised Sharpe of 3.55 at 747 trials to 4.16 at 5,600 — so it is a
+reason to prefer considered ideas over volume, not a reason to starve the loop.
+
+The binding constraint is throughput, not supply. Measured at 0.58 min per
+candidate, an 8-hour session gets through roughly 800 of them, so a library of
+three briefs at `max_attempts_per_brief: 25` covers about a fifth of one night
+and the rest goes back to invented ideas. Raise the cap to shift that mix;
+because sampling is temperature 0.7 with no fixed seed, extra attempts are
+different implementations of the same idea rather than repeats of one.
 
 ## Reading the results
 

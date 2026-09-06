@@ -98,10 +98,15 @@ research:
   enabled: true
   briefs_dir: research/briefs
   # Attempts a single brief gets (per symbol) before it is retired from the
-  # rotation. Re-coding an idea that keeps dying spends a night on one
-  # hypothesis; the codegen repair loop already gets max_fix_attempts within
-  # each of these.
-  max_attempts_per_brief: 3
+  # rotation. Sizing this is really the question "what share of a night should
+  # be researched ideas rather than invented ones", and it depends on
+  # throughput: measured at 0.58 min/candidate (412 candidates in 240 min on
+  # qwen2.5-coder:7b), an 8h session is ~800 candidates. With 3 briefs and 2
+  # symbols, 25 attempts each fills ~150 of them, about a fifth of the night.
+  # Sampling is temperature 0.7 with no fixed seed, so repeats are different
+  # implementations of one idea rather than retries of the same code — the
+  # codegen repair loop handles actual retries under agent.max_fix_attempts.
+  max_attempts_per_brief: 25
   # Characters of brief text allowed into the prompt. It competes for a 7B
   # model's attention with the lessons block and the worked example, so a brief
   # that runs long displaces context rather than adding to it.

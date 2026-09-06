@@ -255,7 +255,9 @@ python scripts/run_agent.py --symbol BTC/USD --iterations 3   # picks briefs up 
 
 The loop rotates through the library least-attempted-first, retires a brief
 after `research.max_attempts_per_brief` tries, and goes back to inventing its
-own ideas when the library is exhausted or absent. Every candidate records
+own ideas when the library is exhausted or absent. At the measured 0.58 min per
+candidate an 8-hour session runs ~800 of them, so that cap is what decides how
+much of a night is researched ideas rather than invented ones. Every candidate records
 `experiments.researched_from`, so you can later check whether researched ideas
 actually cleared more gauntlet stages than self-generated ones.
 
