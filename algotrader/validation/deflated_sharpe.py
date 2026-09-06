@@ -9,6 +9,28 @@ Deflated Sharpe Ratio (DSR) corrects the observed Sharpe for:
 DSR is the probability that the TRUE Sharpe is > 0 given all of the above.
 Rule of thumb: require DSR > 0.95 before believing an edge is real. This single
 number is your best defence against the agent fooling itself.
+
+WHERE V[SR] COMES FROM, AND WHY IT IS NOT THE OBSERVED SPREAD
+Bailey & Lopez de Prado scale the benchmark by sqrt(V[SR]), the variance of the
+Sharpes ACROSS the trials. That is the right quantity when the trials are draws
+from a null with no edge. This project's trial population is not that: it is
+dominated by transaction-cost drag, so the Sharpes are centred far below zero
+with a long left tail from overtrading candidates. Measured on a 747-experiment
+log: the 504 candidates with a dev Sharpe had mean -8.0 and sd 15.9 annualised
+(per-bar sd 0.085); even the 104 that reached walk-forward had mean -13.1.
+Those are not null draws, they are arithmetically doomed strategies, and using
+their spread puts the benchmark at an annualised Sharpe near 50 -- unreachable,
+which is what made this gate unpassable.
+
+So V[SR] defaults to the SAMPLING variance of the per-bar Sharpe estimator under
+the null, 1/n over an n-bar track record. The comparison then reduces to a clean
+question: does this candidate's Sharpe t-statistic exceed the expected maximum of
+n_trials standard normals? Be clear about the direction of the assumption -- 1/n
+is the LOWER bound on how much trial Sharpes can scatter, because real trials
+differ by more than sampling noise (holding period, trade rate, leverage). This
+default is therefore the least conservative honest choice, and a PASS here is
+"not obviously luck", not "definitely an edge". Pass an explicit `sr_variance`
+if you can estimate the null spread of a comparable trial population.
 """
 
 from __future__ import annotations
@@ -37,7 +59,13 @@ def _sharpe_stats(returns: np.ndarray):
 
 def expected_max_sharpe(n_trials: int, sr_variance: float = 1.0) -> float:
     """Expected maximum Sharpe from n_trials independent strategies with zero
-    true edge — the benchmark the observed Sharpe must beat."""
+    true edge — the benchmark the observed Sharpe must beat.
+
+    `sr_variance` must be in the same units as the Sharpe it will be compared
+    against. `deflated_sharpe_ratio` works in per-bar Sharpes, so passing the
+    default 1.0 there compares a per-bar number against a benchmark scaled for
+    an annualised one and rejects everything; see the module docstring.
+    """
     if n_trials < 2:
         return 0.0
     e = 0.5772156649  # Euler-Mascheroni
@@ -50,14 +78,19 @@ def deflated_sharpe_ratio(
     returns: pd.Series,
     n_trials: int = 1,
     sr_benchmark: float | None = None,
+    sr_variance: float | None = None,
 ) -> dict:
     """Compute DSR for a return series.
 
     Args:
         returns:      per-bar strategy returns.
         n_trials:     number of strategy configurations tried to find this one.
-        sr_benchmark: expected max Sharpe under the null; if None, estimated from
-                      n_trials assuming unit variance of trial Sharpes.
+        sr_benchmark: expected max PER-BAR Sharpe under the null. If None it is
+                      derived from n_trials and sr_variance.
+        sr_variance:  variance of per-bar trial Sharpes under the null. If None,
+                      the sampling variance 1/n of the Sharpe estimator over this
+                      track record — see the module docstring for why the
+                      observed cross-trial spread is not used here.
     Returns dict with observed per-period Sharpe, benchmark, and DSR probability.
     """
     r = returns.to_numpy() if isinstance(returns, pd.Series) else np.asarray(returns)
@@ -66,7 +99,12 @@ def deflated_sharpe_ratio(
         return {"dsr": 0.0, "sharpe_periodic": 0.0, "sr_benchmark": 0.0, "n": n}
 
     if sr_benchmark is None:
-        sr_benchmark = expected_max_sharpe(n_trials)
+        # 1/n, not 1.0: `sr` below is a per-bar Sharpe, and a benchmark built for
+        # unit-variance trial Sharpes sits ~3.2 per bar — an annualised Sharpe in
+        # the hundreds, which no candidate can reach and nothing ever passed.
+        if sr_variance is None:
+            sr_variance = 1.0 / n
+        sr_benchmark = expected_max_sharpe(n_trials, sr_variance)
 
     # standard error of the Sharpe estimator with higher-moment adjustment
     denom = np.sqrt(max(1e-12, 1 - skew * sr + (kurt - 1) / 4 * sr**2))
@@ -81,6 +119,7 @@ def deflated_sharpe_ratio(
         "kurtosis": kurt,
         "n": n,
         "n_trials": n_trials,
+        "sr_variance": float(sr_variance) if sr_variance is not None else None,
     }
 
 
