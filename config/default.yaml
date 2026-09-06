@@ -5,8 +5,9 @@ data:
   default_source: ccxt        # ccxt | yfinance
   default_timeframe: 15m
   # Total bars to assemble when fetching (ccxt pages backwards to reach it).
-  # 35040 x 15m is one year; venues cap a single request near 1000.
-  default_bars: 35040
+  # 70080 x 15m is two years; venues cap a single request near 1000. Low trade
+  # rates are forced by costs, so statistical power has to come from history.
+  default_bars: 70080
   # Public OHLCV venue for the ccxt source. Binance blocks some regions; bitstamp
   # and kraken serve public daily history without a key from anywhere.
   ccxt_exchange: bitstamp
@@ -28,11 +29,14 @@ validation:
   # Minimum bars required to accept a strategy result as meaningful.
   # Intraday needs far more trades before a Sharpe means anything, and a year
   # of 15m bars supplies them.
-  min_trades: 100
-  # "A few trades a day." Each round trip pays (fee + slippage) twice, so at
-  # 0.15% per fill three trades a day is ~330% of capital per year in friction.
-  # This is the constraint that decides whether an intraday idea can exist.
-  max_trades_per_day: 4.0
+  min_trades: 60
+  # Measured: cost drag alone produces an annualised Sharpe of about -5 at
+  # 0.4 trades/day, -12 at 2/day and -17 at 4/day. Every one of the 94 candidates
+  # that reached walk-forward scored between -2 and -33, which is that drag and
+  # not the ideas. Above ~1.5 trades/day min_sharpe is unreachable by
+  # arithmetic, so searching there is wasted budget.
+  # Keep this consistent with min_trades: at 729 days, 60 trades is 0.08/day.
+  max_trades_per_day: 1.5
   # Share of exits where stop and target sat inside the same bar and the
   # stop-wins-ties rule decided the outcome. Above this the P&L is an
   # assumption rather than a measurement.

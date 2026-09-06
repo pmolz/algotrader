@@ -24,9 +24,29 @@ THE ARITHMETIC THAT DECIDES EVERYTHING:
 - Every round trip (in and out) costs about 0.30% in fees and slippage.
 - So a trade must gain MORE THAN 0.30% on average just to break even, and a
   strategy is rejected outright above 4 trades/day.
-- Therefore: BE SELECTIVE. Aim for roughly 1-3 trades per day, each targeting a
-  move of 1% or more. A signal that fires on most bars is worthless no matter
-  how good it looks before costs. Hold for hours, not minutes.
+- Therefore: BE SELECTIVE. Aim for roughly 0.3-1.5 trades per day, each
+  targeting a move of 1% or more. A signal that fires on most bars is worthless
+  no matter how good it looks before costs. Hold for hours, not minutes.
+
+HOW TO HIT THAT TRADE RATE (this is the single most common reason a candidate
+is thrown away — read it twice):
+- Do NOT invent a fixed threshold like `score > 0.02` and hope. You cannot know
+  how often that fires, and in practice it fires either never or constantly.
+- Instead, rank your signal against its own recent history with a ROLLING
+  quantile, which fires a controllable fraction of bars by construction:
+
+      score  = <your indicator, higher = stronger setup>
+      thresh = score.rolling(2000, min_periods=500).quantile(0.995)
+      entries = score > thresh
+
+  LOWER entry_q to trade more, RAISE it to trade less. Start around 0.95.
+  The exact rate depends on your score and how long you hold, so expose
+  entry_q as a parameter; if the trade count comes back wrong you will be told
+  the observed rate and can adjust from there.
+- A rolling quantile only looks backwards, so it is lookahead-safe. A
+  whole-sample `.quantile()` with no `.rolling()` is NOT and will be rejected.
+- Every extra `&` condition multiplies the fire rate down. Two filters at 10%
+  each leave 1% of bars. Prefer ONE ranked score over a stack of AND conditions.
 
 THE STRATEGY CONTRACT (follow exactly):
 - Write ONE class that subclasses `Strategy`.
@@ -85,11 +105,11 @@ WORKED_EXAMPLE = """\
 class VolatilityBreakoutPullback(Strategy):
     name = "volatility_breakout_pullback"
 
-    def __init__(self, lookback=96, atr_len=48, trend_len=192,
-                 entry_z=1.5, atr_stop=1.5, atr_target=3.0, **kwargs):
+    def __init__(self, lookback=96, atr_len=48, trend_len=192, rank_len=2000,
+                 entry_q=0.95, max_hold=48, atr_stop=2.0, atr_target=3.0, **kwargs):
         super().__init__(lookback=lookback, atr_len=atr_len, trend_len=trend_len,
-                         entry_z=entry_z, atr_stop=atr_stop,
-                         atr_target=atr_target, **kwargs)
+                         rank_len=rank_len, entry_q=entry_q, max_hold=max_hold,
+                         atr_stop=atr_stop, atr_target=atr_target, **kwargs)
 
     def generate_signals(self, df):
         close = df["close"]
@@ -104,22 +124,32 @@ class VolatilityBreakoutPullback(Strategy):
         atr = tr.rolling(self.atr_len).mean()
         atr_frac = (atr / close).clip(lower=0.002, upper=0.05)
 
-        # Entry: stretched below a rolling mean, but only while the longer trend
-        # is up. The trend filter is what keeps this from firing every hour.
+        # A single ranked score: how stretched below the rolling mean we are,
+        # counted only while the longer trend is up.
         ma = close.rolling(self.lookback).mean()
         sd = close.rolling(self.lookback).std()
-        z = (close - ma) / sd.replace(0.0, np.nan)
-        uptrend = close > close.rolling(self.trend_len).mean()
+        score = -(close - ma) / sd.replace(0.0, np.nan)
+        score = score.where(close > close.rolling(self.trend_len).mean(), 0.0)
 
-        entries = (z < -self.entry_z) & uptrend
-        # Hold until the stop or target fires; the engine will not re-enter
-        # until this returns to 0, which keeps trade count low.
-        positions = entries.astype(float)
+        # Self-calibrating threshold: fire on the strongest `1 - entry_q` of
+        # recent bars. This is what pins the trade rate. A fixed cutoff here
+        # would fire either never or constantly, and there is no way to know
+        # which without running it.
+        thresh = score.rolling(self.rank_len, min_periods=500).quantile(self.entry_q)
+        entries = score > thresh
+
+        # HOLD once entered, so the stop and target are what close the trade.
+        # A bare `entries.astype(float)` goes back to 0 on the next bar and the
+        # engine exits on the signal before either level can fire — measured on
+        # real data, that made 71 of 90 exits "signal" with a 2-bar average
+        # hold, which makes the risk overlay decorative.
+        positions = (entries.astype(float).replace(0.0, np.nan)
+                     .ffill(limit=self.max_hold).fillna(0.0))
 
         return StrategyResult(
             positions=positions.fillna(0.0),
-            stop_loss_pct=(atr_frac * self.atr_stop).fillna(0.02),
-            take_profit_pct=(atr_frac * self.atr_target).fillna(0.04),
+            stop_loss_pct=(atr_frac * self.atr_stop).fillna(0.03),
+            take_profit_pct=(atr_frac * self.atr_target).fillna(0.045),
         )
 ```
 """
@@ -142,7 +172,8 @@ and from anything listed above. Requirements:
 edge? "Momentum" is not a mechanism; "leveraged liquidations force selling that \
 overshoots and then reverts" is.
 2. State what would FALSIFY it — what you would expect to see if the edge is not real.
-3. Use a FILTER so it trades 1-3 times a day, not on every signal.
+3. Control the trade rate with a ROLLING QUANTILE on a single ranked score,
+not with a stack of AND-ed fixed thresholds. Target 0.3-1.5 trades per day.
 4. Set stop_loss_pct and take_profit_pct, sized so the target is a realistic \
 multiple of the stop and the average winner clears 0.30% costs comfortably.
 5. Give every parameter a default.
@@ -193,10 +224,19 @@ Fix it and KEEP THE SAME IDEA — do not substitute a different, simpler strateg
 Change only what the error requires.
 
 If the failure is about how OFTEN it trades, that is a calibration problem, not a
-flaw in the idea. The target window is 0.4 to 4 trades per day (roughly 100-1400
-trades over the backtest). Too few: relax the entry threshold, shorten the
-lookback, or drop the most restrictive filter. Too many: tighten the threshold,
-add a trend or volatility filter, or widen the stop so trades last longer.
+flaw in the idea. The target is 0.3-1.5 trades per day (roughly 100-450 trades
+over the backtest).
+
+The reliable fix is to replace the fixed threshold with a rolling quantile of
+your own signal, then tune ONE number:
+
+    thresh = score.rolling(2000, min_periods=500).quantile(entry_q)
+    entries = score > thresh
+
+Raise entry_q to trade less, lower it to trade more; 0.95 is a reasonable
+starting point. If you already use a quantile, adjust it in that direction. If
+the entry never fired at all, also drop the most restrictive AND-ed condition —
+each one multiplies the fire rate down.
 
 Other common causes:
   * a column that does not exist (only open, high, low, close, volume do)
